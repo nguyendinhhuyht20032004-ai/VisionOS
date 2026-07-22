@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+# artefacts sinh ra khi chạy benchmark
+*_counting.mp4
+*_h264.mp4
+vehicles.mp4
+test_results/
