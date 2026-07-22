@@ -1,0 +1,14 @@
+# Dependencies để chạy BỘ UNIT TEST (không cần GPU / không cần model).
+# Cài: pip install -r requirements-test.txt && pytest
+numpy<2.0.0
+opencv-python-headless>=4.8
+supervision>=0.21
+pytest>=7.0
+
+# --- Chỉ cần khi chạy MÔ HÌNH THẬT (Kaggle GPU), KHÔNG cần cho unit test ---
+# torch
+# transformers==4.57.1
+# accelerate
+# peft
+# Pillow==11.1.0
+# huggingface_hub
