@@ -97,17 +97,29 @@ Các bất biến được khẳng định (bằng chứng "đếm hiệu quả"
 
 ## Chạy mô hình thật (GPU)
 
+Bài người/xe dùng YOLO; chọn 1 backend:
+
 ```bash
-# Cần thêm: torch, super-gradients (YOLO-NAS), transformers (LocateAnything), opencv
-python run_counting.py \
-    --people-video   people.mp4 \
-    --vehicles-video cars.mp4 \
-    --packages-video belt.mp4 \
-    --max-frames 150
+# (khuyến nghị) YOLOv8 — cài ổn định trên Kaggle/Colab:
+pip install ultralytics opencv-python-headless
+python run_counting.py --vehicles-video cars.mp4 --max-frames 100   # tự dùng ultralytics
+
+# hoặc ép YOLO-NAS (super-gradients) nếu đã cài được:
+python run_counting.py --vehicles-video cars.mp4 --yolo-backend super_gradients
+```
+
+`--yolo-backend auto` (mặc định) tự chọn: có super-gradients thì dùng YOLO-NAS,
+không thì rơi về YOLOv8 — nên **không cần cài super-gradients** vẫn chạy được.
+
+Bài kiện hàng (open-vocab) dùng LocateAnything-3B — **cần GPU NVIDIA**:
+
+```bash
+pip install transformers==4.57.1 accelerate opencv-python-headless
+python run_counting.py --packages-video belt.mp4
 ```
 
 Bài nào thiếu video sẽ được bỏ qua. Detector thật được nạp *lazy* theo nhu cầu
-từng bài (YOLO-NAS cho người/xe, LocateAnything cho kiện hàng).
+từng bài.
 
 ---
 

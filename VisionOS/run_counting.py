@@ -91,12 +91,7 @@ def run_selftest() -> int:
 
 def run_real(args) -> int:
     from recognition.counting import CountingPipeline
-    from recognition.detectors import load_locate_anything, load_yolo_nas
-
-    try:
-        from recognition.detectors.locate_anything import LocateAnythingDetector  # noqa
-    except Exception:
-        pass
+    from recognition.detectors import load_locate_anything, load_standard_detector
 
     # Import lazy đọc video (cần opencv).
     def frames_of(path):
@@ -127,7 +122,9 @@ def run_real(args) -> int:
             print(f"⏭  bỏ qua [{key}] — không có video")
             continue
         if scenario.model.startswith("YOLO"):
-            yolo = yolo or load_yolo_nas(confidence=args.confidence)
+            yolo = yolo or load_standard_detector(
+                backend=args.yolo_backend, confidence=args.confidence
+            )
             detector = yolo
         else:
             locate = locate or load_locate_anything()
@@ -148,6 +145,12 @@ def main() -> int:
     ap.add_argument("--queue-video", dest="queue_video")
     ap.add_argument("--max-frames", type=int, default=150)
     ap.add_argument("--confidence", type=float, default=0.65)
+    ap.add_argument(
+        "--yolo-backend",
+        choices=["auto", "ultralytics", "super_gradients"],
+        default="auto",
+        help="động cơ YOLO cho bài người/xe (auto = tự chọn; mặc định ultralytics nếu thiếu super-gradients)",
+    )
     args = ap.parse_args()
 
     if args.selftest or not any(
