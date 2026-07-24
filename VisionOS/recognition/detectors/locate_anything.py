@@ -122,13 +122,28 @@ def _ensure_locate_deps() -> None:
             importlib.import_module(module)
         except Exception:
             need.append(pkg)
-    if not need:
-        return
-    import subprocess
-    import sys
+    if need:
+        import subprocess
+        import sys
 
-    print(f"📦 Cài phụ thuộc còn thiếu cho LocateAnything: {need} ...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *need], check=False)
+        print(f"📦 Cài phụ thuộc còn thiếu cho LocateAnything: {need} ...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", *need], check=False)
+
+    # Cảnh báo phiên bản transformers: model được NVIDIA test với ĐÚNG 4.57.1.
+    # Bản khác gây lỗi kiểu 'Qwen2Config has no attribute rope_theta'. Đổi phiên
+    # bản cần RESTART kernel nên chỉ cảnh báo, không tự cài (tránh nửa vời).
+    try:
+        import transformers
+
+        v = transformers.__version__
+        if not v.startswith("4.57"):
+            print("=" * 74)
+            print(f"⚠️  transformers {v} KHÔNG khớp — LocateAnything-3B cần 4.57.1.")
+            print("   Chạy 1 cell RỒI RESTART KERNEL, sau đó chạy lại run_eval:")
+            print('     !pip install -q "transformers==4.57.1" "tokenizers>=0.20,<0.22" accelerate')
+            print("=" * 74)
+    except Exception:
+        pass
 
 
 class LocateAnythingDetector:
