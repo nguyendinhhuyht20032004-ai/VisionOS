@@ -287,36 +287,48 @@ def _autopin_transformers(target: str = "4.57.1") -> None:
     """
     def _ver():
         try:
+            import importlib
             import importlib.metadata as md
+            importlib.invalidate_caches()
             return md.version("transformers")
         except Exception:
             return None
 
-    if os.environ.get("_LA_PIN_TRIED") == "1":
-        if _ver() != target:
-            print("=" * 74)
-            print(f"⚠️  ĐÃ thử cài transformers=={target} nhưng hiện vẫn là {_ver()!r}.")
-            print("   Mạng bị chặn hoặc Kaggle bật 'Always use latest environment'.")
-            print(f'   Hãy cài TAY 1 cell:  !pip install "transformers=={target}" accelerate')
-            print("   rồi RESTART KERNEL và chạy lại.")
-            print("=" * 74)
-        return  # đã thử 1 lần rồi — không re-exec nữa (tránh vòng lặp)
-
     if _ver() == target:
         return  # đã đúng bản, không cần làm gì
 
+    if os.environ.get("_LA_PIN_TRIED") == "1":
+        # đã cài + re-exec 1 lần mà vẫn sai → KHÔNG lặp nữa. Để version gate trong
+        # detector.load() báo lỗi rõ; ở đây chỉ nhắc cách cài TAY dứt điểm.
+        print("=" * 74)
+        print(f"⚠️  ĐÃ gỡ+cài transformers=={target} nhưng vẫn là {_ver()!r}.")
+        print("   → Kaggle có thể có 2 bản, hoặc mạng chặn. Cài TAY 1 cell:")
+        print(f"     !pip install --force-reinstall --no-deps 'transformers=={target}'")
+        print('     !python -c "import transformers; print(transformers.__version__)"')
+        print("   (phải in 4.57.1) rồi chạy lại cell run_eval. KHÔNG cần restart kernel.")
+        print("=" * 74, flush=True)
+        return
+
     print("=" * 74)
-    print(f"⚙️  transformers=={_ver()} KHÔNG khớp → cài {target} (bản NVIDIA test)…")
+    print(f"⚙️  transformers=={_ver()} KHÔNG khớp → GỠ rồi cài {target} (bản NVIDIA test)…")
     print("   run_eval sẽ TỰ khởi động lại (không cần restart kernel).")
     print("=" * 74, flush=True)
     import subprocess
 
+    # GỠ SẠCH bản cũ trước (5.x để lại file mà bản 4.57.1 có thể không đè hết → import
+    # nhầm), rồi cài 4.57.1 để PIP TỰ hạ tokenizers về bản tương thích (KHÔNG tự ghim
+    # tokenizers — từng gây xung đột). --no-cache-dir tránh dùng lại wheel 5.x đã cache.
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", f"transformers=={target}", "accelerate"],
+        [sys.executable, "-m", "pip", "uninstall", "-y", "-q", "transformers"],
+        check=False,
+    )
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir",
+         f"transformers=={target}", "accelerate"],
         check=False,
     )
     os.environ["_LA_PIN_TRIED"] = "1"
-    print(f"🔄 Khởi động lại với transformers=={_ver()} …", flush=True)
+    print(f"🔄 Sau khi cài: transformers=={_ver()} → khởi động lại tiến trình…", flush=True)
     prog = os.path.abspath(sys.argv[0])
     os.execv(sys.executable, [sys.executable, prog] + sys.argv[1:])  # thay tiến trình
 
