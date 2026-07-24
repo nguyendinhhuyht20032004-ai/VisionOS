@@ -88,6 +88,13 @@ class LocateAnythingDetector:
                                 q = args[0]
                                 k = args[1]
                                 v = args[2]
+                                
+                                original_ndim = q.ndim
+                                if original_ndim == 3:
+                                    q = q.unsqueeze(1)
+                                    k = k.unsqueeze(1)
+                                    v = v.unsqueeze(1)
+                                    
                                 bsz, num_heads, q_len, head_dim = q.shape
                                 _, _, k_len, _ = k.shape
                                 
@@ -117,6 +124,8 @@ class LocateAnythingDetector:
                                         if attn_mask is not None:
                                             if attn_mask.ndim == 4:
                                                 mask_bh = attn_mask[b, h if attn_mask.size(1) > 1 else 0].to(torch.float32)
+                                            elif attn_mask.ndim == 3:
+                                                mask_bh = attn_mask[b].to(torch.float32)
                                             elif attn_mask.ndim == 2:
                                                 mask_bh = attn_mask.to(torch.float32)
                                             else:
@@ -130,6 +139,8 @@ class LocateAnythingDetector:
                                             
                                         out[b, h] = torch.matmul(attn, vh).to(torch.bfloat16)
                                 
+                                if original_ndim == 3:
+                                    out = out.squeeze(1)
                                 return out
                             return _orig_sdpa(*args, **kwargs)
                         F.scaled_dot_product_attention = _ultimate_sdpa
