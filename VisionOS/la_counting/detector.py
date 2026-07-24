@@ -45,8 +45,22 @@ class LocateAnythingDetector:
         # đọc (báo bất đồng bộ, trỏ nhầm dòng); chạy CPU biến nó thành lỗi Python RÕ
         # RÀNG (vd IndexError: index 151655 out of bounds) → chỉ đúng thủ phạm.
         self._cpu_debug = bool(os.environ.get("LA_DEBUG_CPU"))
-        # T4 (Turing) không có bfloat16 kernel → float16 trên GPU; CPU dùng float32.
-        self.dtype = torch.float32 if self._cpu_debug else torch.float16
+        # DTYPE: model được HUẤN LUYỆN ở **bfloat16** (Qwen2/NVIDIA) và mọi code tham
+        # chiếu đều chạy bf16. float16 (dải hẹp, max ~65504) dễ TRÀN ở MLP → cuBLAS
+        # báo CUBLAS_STATUS_INTERNAL_ERROR. torch mới (≥2.3, CUDA≥12) TÍNH được bf16
+        # trên cả T4 (Turing, dù không có tensor-core bf16 gốc — chạy chậm hơn chút
+        # nhưng ĐÚNG). Vì vậy ÉP bf16 trên GPU (KHÔNG dựa vào is_bf16_supported() vì
+        # nó chỉ báo hỗ trợ tensor-core gốc → trả False trên T4 và kẹt lại float16).
+        # Cho phép LA_DTYPE=float16|bfloat16|float32 để ép tay khi cần.
+        env_dtype = (os.environ.get("LA_DTYPE") or "").lower()
+        if self._cpu_debug or not torch.cuda.is_available():
+            self.dtype = torch.float32
+        elif env_dtype in ("float16", "fp16", "half"):
+            self.dtype = torch.float16
+        elif env_dtype in ("float32", "fp32"):
+            self.dtype = torch.float32
+        else:
+            self.dtype = torch.bfloat16  # mặc định: bf16 (dtype gốc của model)
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết

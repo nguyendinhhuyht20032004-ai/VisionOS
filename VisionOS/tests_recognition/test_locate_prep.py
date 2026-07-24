@@ -19,10 +19,12 @@ class LocateAnythingModel:
 """
 
 
-def test_bfloat16_patched_to_float16():
+def test_pixel_values_dtype_left_untouched():
+    # KHÔNG còn ép float16: dòng .to(self.language_model.dtype) giữ nguyên để tự
+    # khớp dtype khi nạp (bf16). Nếu ép float16 sẽ tràn → CUBLAS_INTERNAL_ERROR.
     out = patch_modeling_source(SAMPLE)
-    assert "pixel_values.to(torch.float16)" in out
-    assert "self.language_model.dtype" not in out
+    assert "pixel_values.to(self.language_model.dtype)" in out
+    assert "torch.float16" not in out
 
 
 def test_decord_lmdb_wrapped_in_try_except():
@@ -111,8 +113,9 @@ def test_idempotent():
 def test_patch_all_py_files_covers_processor(tmp_path):
     # file processor (chính chỗ AutoProcessor.from_pretrained crash) có import decord
     (tmp_path / "processing_locateanything.py").write_text("import decord\nimport lmdb\n")
+    # modeling: dùng rope_theta để chắc chắn file này CÓ thứ để vá (không còn vá dtype)
     (tmp_path / "modeling_locateanything.py").write_text(
-        "import torch\npixel_values = pixel_values.to(self.language_model.dtype)\n"
+        "import torch\nself.rope_theta = config.rope_theta\n"
     )
     (tmp_path / "other.py").write_text("import torch\nimport numpy as np\n")
 
@@ -124,7 +127,7 @@ def test_patch_all_py_files_covers_processor(tmp_path):
     assert not any(line == "import decord" for line in proc.splitlines())
 
     model = (tmp_path / "modeling_locateanything.py").read_text()
-    assert "pixel_values.to(torch.float16)" in model
+    assert "getattr(config, 'rope_theta', 1_000_000.0)" in model
 
     other = (tmp_path / "other.py").read_text()
     assert other == "import torch\nimport numpy as np\n"   # không đụng

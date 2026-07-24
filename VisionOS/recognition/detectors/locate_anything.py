@@ -22,31 +22,30 @@ __all__ = ["LocateAnythingDetector", "patch_modeling_source"]
 def patch_modeling_source(code: str) -> str:
     """Vá nội dung các file model (thuần chuỗi → test được).
 
-    Năm vá, đều **idempotent** (vá lại lần nữa không đổi):
+    Bốn vá, đều **idempotent** (vá lại lần nữa không đổi):
 
-    1. **T4 (Turing) không có bfloat16 kernel** → ép ``pixel_values`` sang float16.
-    2. ``import decord`` / ``import lmdb`` ở đầu file khiến
+    1. ``import decord`` / ``import lmdb`` ở đầu file khiến
        ``transformers.check_imports`` **bắt buộc** cài 2 gói này (decord không có
        wheel cho Python 3.12 → lỗi). Chúng chỉ dùng cho video/dataset, KHÔNG cần
        khi suy luận ảnh → bọc vào ``try/except`` để check_imports bỏ qua.
-    3. **``config.rope_theta`` không có trong ``Qwen2Config`` của transformers cũ**
+    2. **``config.rope_theta`` không có trong ``Qwen2Config`` của transformers cũ**
        → dùng ``getattr`` với giá trị mặc định 1_000_000.0 (chuẩn Qwen2).
-    4. **``DynamicCache.to_legacy_cache()`` bị GỠ ở transformers mới** → bỏ lời gọi,
+    3. **``DynamicCache.to_legacy_cache()`` bị GỠ ở transformers mới** → bỏ lời gọi,
        trả thẳng đối tượng ``Cache`` (định dạng chuẩn của bản mới).
-    5. **``DynamicCache.from_legacy_cache()`` cũng bị GỠ** → dòng ngay sau đó gọi
+    4. **``DynamicCache.from_legacy_cache()`` cũng bị GỠ** → dòng ngay sau đó gọi
        ``past_key_values.get_seq_length()`` nên KẾT QUẢ phải là một ``Cache``. Thay
        bằng: đã là Cache thì giữ, còn ``None``/tuple rỗng (bước đầu generate) thì tạo
        ``DynamicCache()`` rỗng. Dùng ``hasattr(x, 'get_seq_length')`` để nhận diện.
 
-    Vá 4+5 làm luồng cache **độc lập phiên bản**: chạy được dù transformers là
+    Vá 3+4 làm luồng cache **độc lập phiên bản**: chạy được dù transformers là
     4.57.1 (NVIDIA test) hay bản mới hơn (Kaggle mặc định).
+
+    KHÔNG còn ép ``pixel_values`` sang float16 nữa: model gốc đã
+    ``pixel_values.to(self.language_model.dtype)`` — tự khớp dtype khi nạp (bf16
+    là mặc định; float16 gây tràn → CUBLAS_STATUS_INTERNAL_ERROR ở MLP).
     """
     import re
 
-    code = code.replace(
-        "pixel_values = pixel_values.to(self.language_model.dtype)",
-        "pixel_values = pixel_values.to(torch.float16)  # T4 fix",
-    )
     # chỉ khớp import ở CỘT 0 (top-level) → sau khi bọc vào try (thụt lề) sẽ không
     # khớp nữa ⇒ idempotent.
     code = re.sub(
