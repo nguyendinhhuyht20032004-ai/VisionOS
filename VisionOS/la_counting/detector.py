@@ -80,14 +80,21 @@ class LocateAnythingDetector:
             self.model_dir, trust_remote_code=True
         )
         config = AutoConfig.from_pretrained(self.model_dir, trust_remote_code=True)
+        # ÉP TOÀN MODEL LÊN 1 GPU. Kaggle "GPU T4 x2" có cuda:0 + cuda:1; nếu để
+        # device_map="auto" thì accelerate CHIA model ra 2 GPU, mà generate() bundled
+        # của model tự .to()/cat tensor giả định 1 thiết bị → lỗi "tensors on cuda:1
+        # different from cuda:0". Model 3B float16 (~6GB) thừa sức nằm gọn 1 T4 (16GB).
+        # Nạp phẳng (không device_map, không hook accelerate) rồi .to() cho tương thích
+        # tối đa với generate() quản lý thiết bị thủ công của model.
         self.model = AutoModel.from_pretrained(
             self.model_dir,
             config=config,
             trust_remote_code=True,
             torch_dtype=self.dtype,
-            device_map="auto",
             attn_implementation="sdpa",  # ép SDPA cho T4
         )
+        if torch.cuda.is_available():
+            self.model = self.model.to("cuda:0")
         self.model.eval()
         self._loaded = True
         print(f"✅ Loaded in {time.time() - t0:.1f}s")
