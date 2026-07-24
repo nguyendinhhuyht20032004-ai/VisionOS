@@ -5,7 +5,7 @@ Dùng ByteTrack + LineZone THẬT của supervision, chỉ thay mô hình bằng
 """
 
 from la_counting import CONVEYOR, PEOPLE_IN_OUT, VEHICLES, CountingPipeline
-from tests.fakes import ScriptedDetector, blank_frames, linear_track, merge_tracks
+from fakes import ScriptedDetector, blank_frames, linear_track, merge_tracks
 
 N = 26
 

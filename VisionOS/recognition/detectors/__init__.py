@@ -48,6 +48,17 @@ def load_ultralytics_yolo(**kwargs):
     return UltralyticsYoloDetector(**kwargs)
 
 
+def load_locate_anything(**kwargs):
+    """Factory lazy cho ``LocateAnythingDetector`` (LocateAnything-3B, open-vocab).
+
+    Detector chế độ SMART: đếm bất kỳ vật gì mô tả bằng ngôn ngữ tự nhiên. Model
+    (torch/transformers) chỉ được nạp khi gọi ``detect`` lần đầu.
+    """
+    from .locate_anything import LocateAnythingDetector
+
+    return LocateAnythingDetector(**kwargs)
+
+
 def load_standard_detector(backend: str = "auto", **kwargs):
     """Trả detector YOLO chế độ STANDARD, tự chọn backend sẵn có.
 
