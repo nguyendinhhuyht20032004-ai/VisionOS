@@ -40,6 +40,26 @@ class LocateAnythingDetector:
         self._torch = torch
         self.dtype = torch.float16  # T4 (Turing) không có bfloat16 kernel
 
+        # Compat: transformers mới kỳ vọng _tied_weights_keys là dict nhưng
+        # modeling_qwen2.py bundled trả list (format cũ). Bọc an toàn: chỉ
+        # can thiệp khi crash; tie_weights() vẫn chạy trước đó nên suy luận
+        # không bị ảnh hưởng. Flag _locate_patched đảm bảo idempotent.
+        try:
+            import transformers.modeling_utils as _tmu
+            if not getattr(_tmu.PreTrainedModel, "_locate_patched", False):
+                _orig = _tmu.PreTrainedModel.get_expanded_tied_weights_keys
+
+                def _safe(self, all_submodels=True):
+                    try:
+                        return _orig(self, all_submodels=all_submodels)
+                    except (AttributeError, TypeError):
+                        return {}
+
+                _tmu.PreTrainedModel.get_expanded_tied_weights_keys = _safe
+                _tmu.PreTrainedModel._locate_patched = True
+        except Exception:
+            pass
+
         t0 = time.time()
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_dir, trust_remote_code=True
