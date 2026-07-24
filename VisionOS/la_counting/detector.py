@@ -62,10 +62,11 @@ class LocateAnythingDetector:
 
         # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
         # T4 không có tensor-core bf16 gốc → cublasSgemmStridedBatched fail.
-        # Ngay cả "math" backend cũng gọi cuBLAS và crash với bf16.
-        # Giải pháp: Monkey-patch F.scaled_dot_product_attention để upcast
-        # query/key/value sang float32 *chỉ trong lúc tính attention*, tránh
-        # OOM (giữ toàn model bf16) và tránh crash (tính attention bằng fp32).
+        # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
+        # T4 không có tensor-core bf16 gốc → cublasSgemmStridedBatched fail.
+        # GỌI F.scaled_dot_product_attention dù cast sang float32 vẫn bị crash
+        # (do PyTorch dispatch ngầm). Giải pháp triệt để: VIẾT LẠI attention thủ công
+        # (eager fallback) bằng torch.matmul (float32) khi gọi SDPA.
         if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
             if cc[0] < 8:  # Turing (T4), Volta, Pascal...
@@ -77,22 +78,41 @@ class LocateAnythingDetector:
                     import torch.nn.functional as F
                     if not getattr(F, "_la_patched_sdpa", False):
                         _orig_sdpa = F.scaled_dot_product_attention
-                        def _safe_sdpa(*args, **kwargs):
-                            if len(args) > 0 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
-                                args_lst = list(args)
-                                for i in range(len(args_lst)):
-                                    if torch.is_tensor(args_lst[i]) and args_lst[i].dtype == torch.bfloat16:
-                                        args_lst[i] = args_lst[i].to(torch.float32)
-                                for k, v in kwargs.items():
-                                    if torch.is_tensor(v) and v.dtype == torch.bfloat16:
-                                        kwargs[k] = v.to(torch.float32)
-                                out = _orig_sdpa(*args_lst, **kwargs)
-                                return out.to(torch.bfloat16)
+                        def _eager_sdpa(*args, **kwargs):
+                            if len(args) >= 3 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
+                                import math
+                                q = args[0].to(torch.float32)
+                                k = args[1].to(torch.float32)
+                                v = args[2].to(torch.float32)
+                                
+                                attn_mask = args[3] if len(args) >= 4 else kwargs.get("attn_mask", None)
+                                dropout_p = args[4] if len(args) >= 5 else kwargs.get("dropout_p", 0.0)
+                                is_causal = args[5] if len(args) >= 6 else kwargs.get("is_causal", False)
+                                scale = args[6] if len(args) >= 7 else kwargs.get("scale", None)
+                                
+                                scale_factor = scale if scale is not None else (1.0 / math.sqrt(q.size(-1)))
+                                attn = torch.matmul(q, k.transpose(-2, -1)) * scale_factor
+                                
+                                if is_causal:
+                                    L, S = q.size(-2), k.size(-2)
+                                    causal_mask = torch.ones(L, S, dtype=torch.bool, device=q.device).tril(diagonal=0)
+                                    attn = attn.masked_fill(~causal_mask, float("-inf"))
+                                
+                                if attn_mask is not None:
+                                    if attn_mask.dtype == torch.bfloat16:
+                                        attn_mask = attn_mask.to(torch.float32)
+                                    attn = attn + attn_mask
+                                
+                                attn = torch.nn.functional.softmax(attn, dim=-1)
+                                if dropout_p > 0.0:
+                                    attn = torch.nn.functional.dropout(attn, p=dropout_p)
+                                
+                                return torch.matmul(attn, v).to(torch.bfloat16)
                             return _orig_sdpa(*args, **kwargs)
-                        F.scaled_dot_product_attention = _safe_sdpa
+                        F.scaled_dot_product_attention = _eager_sdpa
                         F._la_patched_sdpa = True
-                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Monkey-patch SDPA: "
-                      f"tự động cast bf16 -> fp32 để tránh CUBLAS crash.")
+                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Monkey-patch SDPA bằng "
+                      f"Eager Fallback (fp32) để né hoàn toàn CUBLAS crash.")
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
