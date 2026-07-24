@@ -45,8 +45,23 @@ def test_unrelated_imports_untouched():
     assert "try:\n    import torch" not in out  # KHÔNG bọc nhầm torch/numpy
 
 
+QWEN2_SNIPPET = """\
+class Qwen2Attention:
+    def __init__(self, config, layer_idx):
+        self.rope_theta = config.rope_theta
+        self.head_dim = config.hidden_size
+"""
+
+
+def test_rope_theta_patched_to_getattr():
+    out = patch_modeling_source(QWEN2_SNIPPET)
+    assert "getattr(config, 'rope_theta', 1_000_000.0)" in out
+    assert "config.rope_theta" not in out
+
+
 def test_idempotent():
-    once = patch_modeling_source(SAMPLE)
+    combined = SAMPLE + QWEN2_SNIPPET
+    once = patch_modeling_source(combined)
     twice = patch_modeling_source(once)
     assert once == twice   # vá lại không đổi (an toàn khi load nhiều lần)
 

@@ -20,15 +20,17 @@ __all__ = ["LocateAnythingDetector", "patch_modeling_source"]
 
 
 def patch_modeling_source(code: str) -> str:
-    """Vá nội dung ``modeling_locateanything.py`` (thuần chuỗi → test được).
+    """Vá nội dung các file model (thuần chuỗi → test được).
 
-    Hai vá, đều **idempotent** (vá lại lần nữa không đổi):
+    Ba vá, đều **idempotent** (vá lại lần nữa không đổi):
 
     1. **T4 (Turing) không có bfloat16 kernel** → ép ``pixel_values`` sang float16.
     2. ``import decord`` / ``import lmdb`` ở đầu file khiến
        ``transformers.check_imports`` **bắt buộc** cài 2 gói này (decord không có
        wheel cho Python 3.12 → lỗi). Chúng chỉ dùng cho video/dataset, KHÔNG cần
        khi suy luận ảnh → bọc vào ``try/except`` để check_imports bỏ qua.
+    3. **``config.rope_theta`` không có trong ``Qwen2Config`` của transformers cũ**
+       → dùng ``getattr`` với giá trị mặc định 1_000_000.0 (chuẩn Qwen2).
     """
     import re
 
@@ -47,6 +49,13 @@ def patch_modeling_source(code: str) -> str:
         r"(?m)^(from (?:decord|lmdb)\b.*)$",
         "try:\n    \\1\nexcept Exception:\n    pass",
         code,
+    )
+    # rope_theta: Qwen2Config cũ không set attribute này dù config.json có.
+    # getattr với default 1_000_000.0 (Qwen2 standard) → idempotent vì pattern
+    # đã đổi, lần vá sau không còn khớp chuỗi gốc nữa.
+    code = code.replace(
+        "self.rope_theta = config.rope_theta",
+        "self.rope_theta = getattr(config, 'rope_theta', 1_000_000.0)",
     )
     return code
 
