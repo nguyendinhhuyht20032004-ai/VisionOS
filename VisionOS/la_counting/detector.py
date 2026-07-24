@@ -89,7 +89,7 @@ class LocateAnythingDetector:
                                     k = k.unsqueeze(1)
                                     v = v.unsqueeze(1)
                                 
-                                # Cực kỳ quan trọng: phải .contiguous() để tránh device-side assert
+                                # Cực kỳ quan trọng: phải .contiguous() TẤT CẢ tensor để tránh device-side assert
                                 q = q.to(torch.float16).contiguous()
                                 k = k.to(torch.float16).contiguous()
                                 v = v.to(torch.float16).contiguous()
@@ -97,12 +97,18 @@ class LocateAnythingDetector:
                                 new_args = [q, k, v] + list(args[3:])
                                 
                                 for i in range(3, len(new_args)):
-                                    if torch.is_tensor(new_args[i]) and new_args[i].dtype == torch.bfloat16:
-                                        new_args[i] = new_args[i].to(torch.float16)
-                                        
+                                    if torch.is_tensor(new_args[i]):
+                                        if new_args[i].dtype == torch.bfloat16:
+                                            new_args[i] = new_args[i].to(torch.float16).contiguous()
+                                        else:
+                                            new_args[i] = new_args[i].contiguous()
+                                            
                                 for key, val in kwargs.items():
-                                    if torch.is_tensor(val) and val.dtype == torch.bfloat16:
-                                        kwargs[key] = val.to(torch.float16)
+                                    if torch.is_tensor(val):
+                                        if val.dtype == torch.bfloat16:
+                                            kwargs[key] = val.to(torch.float16).contiguous()
+                                        else:
+                                            kwargs[key] = val.contiguous()
                                 
                                 out = _orig_sdpa(*new_args, **kwargs)
                                 
