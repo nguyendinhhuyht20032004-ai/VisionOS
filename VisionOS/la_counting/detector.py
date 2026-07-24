@@ -63,38 +63,79 @@ class LocateAnythingDetector:
         # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
         # T4 không có tensor-core bf16 gốc → cublasSgemmStridedBatched fail.
         # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
-        # T4 không có tensor-core bf16 gốc. Ngay cả math backend với float32 cũng crash
-        # (do cublasSgemmStridedBatched dính lỗi workspace/OOM).
-        # Giải pháp: Monkey-patch F.scaled_dot_product_attention để upcast sang float16.
-        # float16 sử dụng Tensor Cores trên T4, không tràn bộ nhớ, và chạy được
-        # mem_efficient_attention (tránh hoàn toàn cuBLAS).
+        # T4 không có tensor-core bf16 gốc. Gọi math_sdp với float32 thì bị lỗi
+        # cublasSgemmStridedBatched. Cast qua float16 thì dính device-side assert 
+        # (do overflow > 65504 của Qwen2).
+        # GIẢI PHÁP TỐI THƯỢNG: Tự viết lại attention bằng vòng lặp qua từng head
+        # (head-by-head loop) bằng float32. 
+        # 1. Tránh hoàn toàn cublasSgemmStridedBatched (chỉ dùng matmul 2D siêu ổn định).
+        # 2. Không bị OOM (vì ma trận attention 4096x4096 chỉ chiếm 64MB mỗi vòng lặp).
+        # 3. Không bị overflow (vì tính toán bằng float32, chỉ cast kết quả về bf16).
         if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
             if cc[0] < 8:  # Turing (T4), Volta, Pascal...
                 torch.backends.cuda.enable_flash_sdp(False)
-                torch.backends.cuda.enable_mem_efficient_sdp(True) # Hỗ trợ float16 trên T4
+                torch.backends.cuda.enable_mem_efficient_sdp(False)
                 torch.backends.cuda.enable_math_sdp(True)
                 
                 if self.dtype == torch.bfloat16:
                     import torch.nn.functional as F
                     if not getattr(F, "_la_patched_sdpa", False):
                         _orig_sdpa = F.scaled_dot_product_attention
-                        def _safe_sdpa(*args, **kwargs):
-                            if len(args) > 0 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
-                                args_lst = list(args)
-                                for i in range(len(args_lst)):
-                                    if torch.is_tensor(args_lst[i]) and args_lst[i].dtype == torch.bfloat16:
-                                        args_lst[i] = args_lst[i].to(torch.float16)
-                                for k, v in kwargs.items():
-                                    if torch.is_tensor(v) and v.dtype == torch.bfloat16:
-                                        kwargs[k] = v.to(torch.float16)
-                                out = _orig_sdpa(*args_lst, **kwargs)
-                                return out.to(torch.bfloat16)
+                        def _ultimate_sdpa(*args, **kwargs):
+                            if len(args) >= 3 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
+                                import math
+                                q = args[0]
+                                k = args[1]
+                                v = args[2]
+                                bsz, num_heads, q_len, head_dim = q.shape
+                                _, _, k_len, _ = k.shape
+                                
+                                attn_mask = args[3] if len(args) >= 4 else kwargs.get("attn_mask", None)
+                                dropout_p = args[4] if len(args) >= 5 else kwargs.get("dropout_p", 0.0)
+                                is_causal = args[5] if len(args) >= 6 else kwargs.get("is_causal", False)
+                                scale = args[6] if len(args) >= 7 else kwargs.get("scale", None)
+                                
+                                scale_factor = scale if scale is not None else (1.0 / math.sqrt(head_dim))
+                                out = torch.empty(bsz, num_heads, q_len, head_dim, dtype=torch.bfloat16, device=q.device)
+                                
+                                causal_mask = None
+                                if is_causal:
+                                    causal_mask = torch.ones(q_len, k_len, dtype=torch.bool, device=q.device).tril(diagonal=0)
+                                
+                                for b in range(bsz):
+                                    for h in range(num_heads):
+                                        qh = q[b, h].to(torch.float32)
+                                        kh = k[b, h].to(torch.float32)
+                                        vh = v[b, h].to(torch.float32)
+                                        
+                                        attn = torch.matmul(qh, kh.transpose(-2, -1)) * scale_factor
+                                        
+                                        if causal_mask is not None:
+                                            attn = attn.masked_fill(~causal_mask, float("-inf"))
+                                            
+                                        if attn_mask is not None:
+                                            if attn_mask.ndim == 4:
+                                                mask_bh = attn_mask[b, h if attn_mask.size(1) > 1 else 0].to(torch.float32)
+                                            elif attn_mask.ndim == 2:
+                                                mask_bh = attn_mask.to(torch.float32)
+                                            else:
+                                                mask_bh = attn_mask.to(torch.float32)
+                                            attn = attn + mask_bh
+                                            
+                                        attn = torch.nn.functional.softmax(attn, dim=-1)
+                                        
+                                        if dropout_p > 0.0:
+                                            attn = torch.nn.functional.dropout(attn, p=dropout_p)
+                                            
+                                        out[b, h] = torch.matmul(attn, vh).to(torch.bfloat16)
+                                
+                                return out
                             return _orig_sdpa(*args, **kwargs)
-                        F.scaled_dot_product_attention = _safe_sdpa
+                        F.scaled_dot_product_attention = _ultimate_sdpa
                         F._la_patched_sdpa = True
                 print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Monkey-patch SDPA: "
-                      f"tự động cast bf16 -> float16 để dùng Tensor Cores, tránh CUBLAS crash.")
+                      f"Dùng Eager loop-by-head (fp32) để tránh 100% cuBLAS crash & OOM & Overflow.")
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
