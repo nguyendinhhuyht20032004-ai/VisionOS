@@ -136,7 +136,11 @@ class LocateAnythingDetector:
             config=config,
             trust_remote_code=True,
             torch_dtype=self.dtype,
-            attn_implementation="sdpa",  # ép SDPA cho T4
+            # T4 (Turing) KHÔNG có tensor-core bf16 gốc → SDPA kernel dùng cuBLAS
+            # sẽ CRASH (CUBLAS_STATUS_EXECUTION_FAILED) khi nhân ma trận bf16.
+            # "eager" = attention thủ công (vanilla matmul) → chạy chậm hơn nhưng
+            # ĐÚNG trên T4 với mọi dtype. Chỉ dùng "sdpa" trên Ampere+.
+            attn_implementation="eager",
         )
         if torch.cuda.is_available() and not self._cpu_debug:
             self.model = self.model.to("cuda:0")
