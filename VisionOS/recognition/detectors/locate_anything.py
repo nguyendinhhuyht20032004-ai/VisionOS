@@ -33,8 +33,10 @@ def patch_modeling_source(code: str) -> str:
        → dùng ``getattr`` với giá trị mặc định 1_000_000.0 (chuẩn Qwen2).
     4. **``DynamicCache.to_legacy_cache()`` bị GỠ ở transformers mới** → bỏ lời gọi,
        trả thẳng đối tượng ``Cache`` (định dạng chuẩn của bản mới).
-    5. **``DynamicCache.from_legacy_cache()`` cũng bị GỠ** → thay bằng tạo
-       ``DynamicCache()`` rỗng (chỉ chạy ở bước đầu generate khi cache là None).
+    5. **``DynamicCache.from_legacy_cache()`` cũng bị GỠ** → dòng ngay sau đó gọi
+       ``past_key_values.get_seq_length()`` nên KẾT QUẢ phải là một ``Cache``. Thay
+       bằng: đã là Cache thì giữ, còn ``None``/tuple rỗng (bước đầu generate) thì tạo
+       ``DynamicCache()`` rỗng. Dùng ``hasattr(x, 'get_seq_length')`` để nhận diện.
 
     Vá 4+5 làm luồng cache **độc lập phiên bản**: chạy được dù transformers là
     4.57.1 (NVIDIA test) hay bản mới hơn (Kaggle mặc định).
@@ -70,16 +72,19 @@ def patch_modeling_source(code: str) -> str:
     # bản mới; vòng lặp generate sau đó nhận Cache và không cần convert nữa.
     # Idempotent: sau khi thay, không còn ".to_legacy_cache()" để khớp.
     code = re.sub(r"(\w+)\.to_legacy_cache\(\)", r"\1", code)
-    # from_legacy_cache(): cũng bị gỡ ở transformers mới. Dòng
-    # ``DynamicCache.from_legacy_cache(x)`` chỉ chạy khi x KHÔNG phải Cache — trong
-    # vòng generate thì đó là bước đầu, x là None → tạo DynamicCache() rỗng; nếu x
-    # đã có sẵn (Cache/tuple) thì giữ nguyên. Idempotent: chuỗi from_legacy_cache
-    # biến mất sau khi thay nên lần vá sau không còn khớp.
-    code = re.sub(
-        r"DynamicCache\.from_legacy_cache\((\w+)\)",
-        r"(DynamicCache() if \1 is None else \1)",
-        code,
-    )
+    # from_legacy_cache(): cũng bị gỡ ở transformers mới. Dòng ngay sau nó gọi
+    # ``x.get_seq_length()`` nên x PHẢI là Cache. Trong vòng generate, dòng này chỉ
+    # chạy ở bước đầu khi x là None HOẶC tuple rỗng () → cả hai đều cần tạo
+    # DynamicCache() rỗng; nếu x đã là Cache thì giữ nguyên. Nhận diện bằng
+    # ``hasattr(x, 'get_seq_length')`` (chỉ Cache mới có).
+    #
+    # Chuẩn hoá CẢ HAI dạng để an toàn khi snapshot đã bị bản vá TRƯỚC sửa 1 lần:
+    #   (a) dạng gốc:      DynamicCache.from_legacy_cache(x)
+    #   (b) dạng vá cũ:    (DynamicCache() if x is None else x)   ← thiếu, gây lỗi tuple
+    # → cùng đưa về:       (x if hasattr(x, 'get_seq_length') else DynamicCache())
+    _cache_fix = r"(\1 if hasattr(\1, 'get_seq_length') else DynamicCache())"
+    code = re.sub(r"DynamicCache\.from_legacy_cache\((\w+)\)", _cache_fix, code)
+    code = re.sub(r"\(DynamicCache\(\) if (\w+) is None else \1\)", _cache_fix, code)
     return code
 
 

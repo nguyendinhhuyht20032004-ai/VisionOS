@@ -64,7 +64,18 @@ CACHE_SNIPPET = (
     "if use_legacy_cache else next_decoder_cache\n"
 )
 
-FROM_CACHE_SNIPPET = "        past_key_values = DynamicCache.from_legacy_cache(past_key_values)\n"
+FROM_CACHE_SNIPPET = (
+    "        past_key_values = DynamicCache.from_legacy_cache(past_key_values)\n"
+    "        past_key_values_length = past_key_values.get_seq_length()\n"
+)
+
+# Dạng ĐÃ bị bản vá TRƯỚC sửa (thiếu: để nguyên tuple → get_seq_length lỗi).
+OLD_PATCHED_SNIPPET = (
+    "        past_key_values = (DynamicCache() if past_key_values is None else past_key_values)\n"
+    "        past_key_values_length = past_key_values.get_seq_length()\n"
+)
+
+ROBUST = "(past_key_values if hasattr(past_key_values, 'get_seq_length') else DynamicCache())"
 
 
 def test_to_legacy_cache_call_removed():
@@ -74,14 +85,21 @@ def test_to_legacy_cache_call_removed():
     assert "next_cache = next_decoder_cache if use_legacy_cache else next_decoder_cache" in out
 
 
-def test_from_legacy_cache_replaced_with_empty_ctor():
+def test_from_legacy_cache_replaced_with_cache_guard():
     out = patch_modeling_source(FROM_CACHE_SNIPPET)
     assert "from_legacy_cache" not in out          # hàm cũ đã bị thay
-    assert "DynamicCache() if past_key_values is None else past_key_values" in out
+    assert ROBUST in out                           # cho ra Cache dù None/tuple/Cache
+
+
+def test_old_buggy_patch_form_is_normalized():
+    # Snapshot đã bị bản vá TRƯỚC sửa thành dạng thiếu → bản vá mới phải chuẩn hoá
+    out = patch_modeling_source(OLD_PATCHED_SNIPPET)
+    assert ROBUST in out
+    assert "if past_key_values is None else past_key_values" not in out
 
 
 def test_idempotent():
-    combined = SAMPLE + QWEN2_SNIPPET + CACHE_SNIPPET + FROM_CACHE_SNIPPET
+    combined = SAMPLE + QWEN2_SNIPPET + CACHE_SNIPPET + FROM_CACHE_SNIPPET + OLD_PATCHED_SNIPPET
     once = patch_modeling_source(combined)
     twice = patch_modeling_source(once)
     assert once == twice   # vá lại không đổi (an toàn khi load nhiều lần)
