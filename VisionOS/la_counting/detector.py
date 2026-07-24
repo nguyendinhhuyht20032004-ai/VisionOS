@@ -81,9 +81,9 @@ class LocateAnythingDetector:
                         def _eager_sdpa(*args, **kwargs):
                             if len(args) >= 3 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
                                 import math
-                                q = args[0].to(torch.float32)
-                                k = args[1].to(torch.float32)
-                                v = args[2].to(torch.float32)
+                                q = args[0].to(torch.float32).contiguous()
+                                k = args[1].to(torch.float32).contiguous()
+                                v = args[2].to(torch.float32).contiguous()
                                 
                                 attn_mask = args[3] if len(args) >= 4 else kwargs.get("attn_mask", None)
                                 dropout_p = args[4] if len(args) >= 5 else kwargs.get("dropout_p", 0.0)
