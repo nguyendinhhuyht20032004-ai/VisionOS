@@ -34,18 +34,26 @@ class LocateAnythingDetector:
     # Nạp mô hình
     # ------------------------------------------------------------------ #
     def load(self):
+        import os
+
         import torch
         import transformers
         from transformers import AutoConfig, AutoModel, AutoProcessor, AutoTokenizer
 
         self._torch = torch
-        self.dtype = torch.float16  # T4 (Turing) không có bfloat16 kernel
+        # LA_DEBUG_CPU=1 → nạp trên CPU (float32). CUDA "device-side assert" rất khó
+        # đọc (báo bất đồng bộ, trỏ nhầm dòng); chạy CPU biến nó thành lỗi Python RÕ
+        # RÀNG (vd IndexError: index 151655 out of bounds) → chỉ đúng thủ phạm.
+        self._cpu_debug = bool(os.environ.get("LA_DEBUG_CPU"))
+        # T4 (Turing) không có bfloat16 kernel → float16 trên GPU; CPU dùng float32.
+        self.dtype = torch.float32 if self._cpu_debug else torch.float16
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
         # đúng phiên bản giúp chẩn đoán nhanh khi có sự cố.
         print(f"🔧 transformers=={transformers.__version__} · torch=={torch.__version__} "
-              f"· CUDA {torch.cuda.is_available()}")
+              f"· CUDA {torch.cuda.is_available()} · dtype={self.dtype}"
+              + ("  ⚙️ LA_DEBUG_CPU=1 (chạy CPU để lấy lỗi rõ ràng)" if self._cpu_debug else ""))
 
         # Compat shim cho transformers MỚI hơn 4.57.1 (bản NVIDIA test model).
         # Model bundle sẵn modeling_qwen2.py / modeling_locateanything.py viết cho
@@ -100,12 +108,12 @@ class LocateAnythingDetector:
             torch_dtype=self.dtype,
             attn_implementation="sdpa",  # ép SDPA cho T4
         )
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() and not self._cpu_debug:
             self.model = self.model.to("cuda:0")
         self.model.eval()
         self._loaded = True
-        print(f"✅ Loaded in {time.time() - t0:.1f}s")
-        if torch.cuda.is_available():
+        print(f"✅ Loaded in {time.time() - t0:.1f}s (device={self.model.device})")
+        if torch.cuda.is_available() and not self._cpu_debug:
             print(f"   GPU Mem: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
         return self
 
@@ -120,7 +128,7 @@ class LocateAnythingDetector:
             v = torch.from_numpy(v)
         if torch.is_tensor(v):
             if v.is_floating_point():
-                return v.to(device=self.model.device, dtype=torch.float16)
+                return v.to(device=self.model.device, dtype=self.dtype)
             return v.to(self.model.device)
         return v
 
