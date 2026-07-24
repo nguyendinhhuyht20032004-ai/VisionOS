@@ -9,6 +9,7 @@ from recognition.evaluation import (
     DetectionMetrics,
     evaluate,
     greedy_match,
+    match_assign,
     nms_dedup,
     verdict,
 )
@@ -67,6 +68,23 @@ def test_as_row_keys():
     row = evaluate([[A]], [[A]], 0.5, label="person").as_row()
     for k in ("lớp", "P", "R", "F1", "MAE", "kết luận"):
         assert k in row
+
+
+# --------------------------------------------------------------------------- #
+# match_assign (dùng để tô màu ảnh minh hoạ)
+# --------------------------------------------------------------------------- #
+def test_match_assign_labels_tp_fp_and_missed():
+    # pred: [A'(khớp A), thừa]; gt: [A, B] -> pred=[TP,FP], B bị miss
+    Ap = bb(0, 0, 10, 10)
+    extra = bb(100, 100, 110, 110)
+    status, gt_missed = match_assign([Ap, extra], [A, B], 0.5)
+    assert status == ["TP", "FP"]
+    assert gt_missed == [False, True]   # A khớp, B bỏ sót
+
+
+def test_match_assign_all_missed_when_no_pred():
+    status, gt_missed = match_assign([], [A, B], 0.5)
+    assert status == [] and gt_missed == [True, True]
 
 
 # --------------------------------------------------------------------------- #

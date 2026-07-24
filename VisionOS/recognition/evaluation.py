@@ -22,7 +22,41 @@ from typing import List, Optional, Sequence, Tuple
 
 from .base import BoundingBox
 
-__all__ = ["greedy_match", "DetectionMetrics", "evaluate", "verdict", "nms_dedup"]
+__all__ = [
+    "greedy_match", "match_assign", "DetectionMetrics", "evaluate", "verdict", "nms_dedup",
+]
+
+
+def match_assign(
+    pred_boxes: Sequence[BoundingBox],
+    gt_boxes: Sequence[BoundingBox],
+    iou_thr: float = 0.5,
+    scores: Optional[Sequence[float]] = None,
+):
+    """Như :func:`greedy_match` nhưng trả TRẠNG THÁI từng box để vẽ minh hoạ.
+
+    Trả về ``(pred_status, gt_missed)``:
+      * ``pred_status[i]`` = ``"TP"`` nếu prediction i khớp một GT, ngược lại ``"FP"``.
+      * ``gt_missed[j]``   = ``True`` nếu GT j không được prediction nào khớp (FN).
+    """
+    order = list(range(len(pred_boxes)))
+    if scores is not None:
+        order.sort(key=lambda i: scores[i], reverse=True)
+    used = [False] * len(gt_boxes)
+    status = ["FP"] * len(pred_boxes)
+    for i in order:
+        best_iou, best_j = 0.0, -1
+        for j, g in enumerate(gt_boxes):
+            if used[j]:
+                continue
+            v = pred_boxes[i].iou(g)
+            if v > best_iou:
+                best_iou, best_j = v, j
+        if best_j >= 0 and best_iou >= iou_thr:
+            used[best_j] = True
+            status[i] = "TP"
+    gt_missed = [not u for u in used]
+    return status, gt_missed
 
 
 def nms_dedup(
