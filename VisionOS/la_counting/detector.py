@@ -123,11 +123,12 @@ class LocateAnythingDetector:
                                             
                                         if attn_mask is not None:
                                             if attn_mask.ndim == 4:
-                                                mask_bh = attn_mask[b, h if attn_mask.size(1) > 1 else 0].to(torch.float32)
+                                                b_idx = b if attn_mask.size(0) > 1 else 0
+                                                h_idx = h if attn_mask.size(1) > 1 else 0
+                                                mask_bh = attn_mask[b_idx, h_idx].to(torch.float32)
                                             elif attn_mask.ndim == 3:
-                                                mask_bh = attn_mask[b].to(torch.float32)
-                                            elif attn_mask.ndim == 2:
-                                                mask_bh = attn_mask.to(torch.float32)
+                                                b_idx = b if attn_mask.size(0) > 1 else 0
+                                                mask_bh = attn_mask[b_idx].to(torch.float32)
                                             else:
                                                 mask_bh = attn_mask.to(torch.float32)
                                             attn = attn + mask_bh
