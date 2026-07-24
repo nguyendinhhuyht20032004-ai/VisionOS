@@ -62,17 +62,37 @@ class LocateAnythingDetector:
 
         # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
         # T4 không có tensor-core bf16 gốc → cublasSgemmStridedBatched fail.
-        # Ép chỉ dùng "math" backend: backend này TỰ UPCAST sang float32 khi tính
-        # attention → kết quả đúng, tốn thêm chút VRAM tạm nhưng KHÔNG tải toàn bộ
-        # model lên float32 → vẫn ~7GB. Trên Ampere+ thì cả 3 backend đều OK.
+        # Ngay cả "math" backend cũng gọi cuBLAS và crash với bf16.
+        # Giải pháp: Monkey-patch F.scaled_dot_product_attention để upcast
+        # query/key/value sang float32 *chỉ trong lúc tính attention*, tránh
+        # OOM (giữ toàn model bf16) và tránh crash (tính attention bằng fp32).
         if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
             if cc[0] < 8:  # Turing (T4), Volta, Pascal...
                 torch.backends.cuda.enable_flash_sdp(False)
                 torch.backends.cuda.enable_mem_efficient_sdp(False)
                 torch.backends.cuda.enable_math_sdp(True)
-                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → ép SDPA math backend "
-                      f"(tự upcast f32, tránh CUBLAS crash bf16).")
+                
+                if self.dtype == torch.bfloat16:
+                    import torch.nn.functional as F
+                    if not getattr(F, "_la_patched_sdpa", False):
+                        _orig_sdpa = F.scaled_dot_product_attention
+                        def _safe_sdpa(*args, **kwargs):
+                            if len(args) > 0 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
+                                args_lst = list(args)
+                                for i in range(len(args_lst)):
+                                    if torch.is_tensor(args_lst[i]) and args_lst[i].dtype == torch.bfloat16:
+                                        args_lst[i] = args_lst[i].to(torch.float32)
+                                for k, v in kwargs.items():
+                                    if torch.is_tensor(v) and v.dtype == torch.bfloat16:
+                                        kwargs[k] = v.to(torch.float32)
+                                out = _orig_sdpa(*args_lst, **kwargs)
+                                return out.to(torch.bfloat16)
+                            return _orig_sdpa(*args, **kwargs)
+                        F.scaled_dot_product_attention = _safe_sdpa
+                        F._la_patched_sdpa = True
+                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Monkey-patch SDPA: "
+                      f"tự động cast bf16 -> fp32 để tránh CUBLAS crash.")
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
