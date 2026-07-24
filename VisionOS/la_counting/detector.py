@@ -55,6 +55,22 @@ class LocateAnythingDetector:
               f"· CUDA {torch.cuda.is_available()} · dtype={self.dtype}"
               + ("  ⚙️ LA_DEBUG_CPU=1 (chạy CPU để lấy lỗi rõ ràng)" if self._cpu_debug else ""))
 
+        # CHỐT PHIÊN BẢN: model chỉ tương thích transformers 4.57.x. Trên 5.x, dù
+        # nạp được (nhờ các bản vá), attention/rotary vẫn sinh "device-side assert"
+        # khó đọc lúc generate. Thà DỪNG NGAY với thông báo rõ còn hơn để user bơi
+        # trong CUDA assert. (auto-pin trong run_eval lẽ ra đã đưa về 4.57.1.)
+        if not transformers.__version__.startswith("4.57"):
+            raise RuntimeError(
+                "\n" + "=" * 72 + "\n"
+                f"❌ Đang chạy transformers=={transformers.__version__} — model CẦN 4.57.x.\n"
+                "   Auto-pin trong run_eval đã KHÔNG đưa được về 4.57.1 (pip bị chặn,\n"
+                "   hoặc Kaggle giữ 2 bản transformers). Chạy 1 cell rồi chạy lại:\n"
+                "     !pip install --force-reinstall --no-deps 'transformers==4.57.1'\n"
+                "     !python -c \"import transformers; print(transformers.__version__)\"\n"
+                "   (phải in ra 4.57.1). KHÔNG cần restart kernel — run_eval là tiến trình riêng.\n"
+                + "=" * 72
+            )
+
         # Compat shim cho transformers MỚI hơn 4.57.1 (bản NVIDIA test model).
         # Model bundle sẵn modeling_qwen2.py / modeling_locateanything.py viết cho
         # 4.57.1; bản mới đổi cơ chế "tied weights" nên vỡ ở 2 chỗ:
@@ -144,12 +160,17 @@ class LocateAnythingDetector:
         w, h = pil_image.size
         max_tok = max_new_tokens or self.max_new_tokens
 
+        # Prompt CHÍNH THỨC của LocateAnything (ground_multi) — dùng đúng câu NVIDIA
+        # test để không rơi vào nhánh chưa kiểm thử.
+        instruction = (
+            f"Locate all the instances that match the following description: {prompt}."
+        )
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": f"Locate all instances of: {prompt}"},
+                    {"type": "text", "text": instruction},
                 ],
             }
         ]
