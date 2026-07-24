@@ -40,14 +40,22 @@ class LocateAnythingDetector:
         self._torch = torch
         self.dtype = torch.float16  # T4 (Turing) không có bfloat16 kernel
 
-        # Compat: transformers mới kỳ vọng _tied_weights_keys là dict nhưng
-        # modeling_qwen2.py bundled trả list (format cũ). Bọc an toàn: chỉ
-        # can thiệp khi crash; tie_weights() vẫn chạy trước đó nên suy luận
-        # không bị ảnh hưởng. Flag _locate_patched đảm bảo idempotent.
+        # Compat shim cho transformers MỚI hơn 4.57.1 (bản NVIDIA test model).
+        # Model bundle sẵn modeling_qwen2.py / modeling_locateanything.py viết cho
+        # 4.57.1; bản mới đổi cơ chế "tied weights" nên vỡ ở 2 chỗ:
+        #   (a) get_expanded_tied_weights_keys: bundled đưa _tied_weights_keys dạng
+        #       LIST (format cũ) nhưng bản mới coi là DICT → 'list' has no 'keys'.
+        #   (b) all_tied_weights_keys: bản mới đặt trong post_init(), nhưng model
+        #       composite (LocateAnythingForConditionalGeneration) bỏ qua post_init
+        #       mới → thiếu attribute khi device_map suy luận thiết bị.
+        # Cả hai vá đều VÔ HẠI cho suy luận: tie_weights() thật vẫn chạy khi load;
+        # 2 thứ trên chỉ là metadata phục vụ device_map/checkpoint. Idempotent nhờ
+        # cờ _locate_patched.
         try:
             import transformers.modeling_utils as _tmu
-            if not getattr(_tmu.PreTrainedModel, "_locate_patched", False):
-                _orig = _tmu.PreTrainedModel.get_expanded_tied_weights_keys
+            _PTM = _tmu.PreTrainedModel
+            if not getattr(_PTM, "_locate_patched", False):
+                _orig = _PTM.get_expanded_tied_weights_keys
 
                 def _safe(self, all_submodels=True):
                     try:
@@ -55,8 +63,12 @@ class LocateAnythingDetector:
                     except (AttributeError, TypeError):
                         return {}
 
-                _tmu.PreTrainedModel.get_expanded_tied_weights_keys = _safe
-                _tmu.PreTrainedModel._locate_patched = True
+                _PTM.get_expanded_tied_weights_keys = _safe
+                # default cấp lớp: instance nào không set (bỏ qua post_init mới) sẽ
+                # đọc dict rỗng → len()==0 → "không có tied weight" → không lỗi.
+                if not hasattr(_PTM, "all_tied_weights_keys"):
+                    _PTM.all_tied_weights_keys = {}
+                _PTM._locate_patched = True
         except Exception:
             pass
 
