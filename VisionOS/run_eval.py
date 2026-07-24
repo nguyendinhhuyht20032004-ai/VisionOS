@@ -272,6 +272,55 @@ def run_real(args) -> int:
     return 0
 
 
+def _autopin_transformers(target: str = "4.57.1") -> None:
+    """Bảo đảm ``transformers==target`` (bản NVIDIA test LocateAnything-3B).
+
+    Kaggle mặc định **transformers 5.0.0** — bản *major* khác hẳn 4.57.1: cache,
+    rotary, attention, position_ids đều viết lại → code bundled của model KHÔNG
+    chạy được (kết cục là CUDA "device-side assert"). Vá từng dòng cho 5.x là vô
+    vọng, nên bắt buộc về 4.57.1.
+
+    Pin thủ công hay trượt (quên restart kernel / Kaggle giữ bản mới). Hàm này cài
+    đúng bản rồi **RE-EXEC chính tiến trình** ``run_eval`` — vì đây là subprocess
+    riêng của lệnh ``!python run_eval.py`` nên KHÔNG cần restart kernel notebook.
+    Cờ env ``_LA_PIN_TRIED`` chặn lặp vô hạn nếu mạng/Kaggle chặn cài.
+    """
+    def _ver():
+        try:
+            import importlib.metadata as md
+            return md.version("transformers")
+        except Exception:
+            return None
+
+    if os.environ.get("_LA_PIN_TRIED") == "1":
+        if _ver() != target:
+            print("=" * 74)
+            print(f"⚠️  ĐÃ thử cài transformers=={target} nhưng hiện vẫn là {_ver()!r}.")
+            print("   Mạng bị chặn hoặc Kaggle bật 'Always use latest environment'.")
+            print(f'   Hãy cài TAY 1 cell:  !pip install "transformers=={target}" accelerate')
+            print("   rồi RESTART KERNEL và chạy lại.")
+            print("=" * 74)
+        return  # đã thử 1 lần rồi — không re-exec nữa (tránh vòng lặp)
+
+    if _ver() == target:
+        return  # đã đúng bản, không cần làm gì
+
+    print("=" * 74)
+    print(f"⚙️  transformers=={_ver()} KHÔNG khớp → cài {target} (bản NVIDIA test)…")
+    print("   run_eval sẽ TỰ khởi động lại (không cần restart kernel).")
+    print("=" * 74, flush=True)
+    import subprocess
+
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", f"transformers=={target}", "accelerate"],
+        check=False,
+    )
+    os.environ["_LA_PIN_TRIED"] = "1"
+    print(f"🔄 Khởi động lại với transformers=={_ver()} …", flush=True)
+    prog = os.path.abspath(sys.argv[0])
+    os.execv(sys.executable, [sys.executable, prog] + sys.argv[1:])  # thay tiến trình
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Đánh giá độ chính xác mô hình trên COCO")
     ap.add_argument("--selftest", action="store_true", help="kiểm chứng bộ chấm điểm (không GPU)")
@@ -294,6 +343,8 @@ def main() -> int:
         return run_selftest()
     if args.analyze_only:
         return run_analyze_only(args)
+    if args.model == "locate":
+        _autopin_transformers()  # có thể cài 4.57.1 + re-exec tiến trình
     return run_real(args)
 
 
