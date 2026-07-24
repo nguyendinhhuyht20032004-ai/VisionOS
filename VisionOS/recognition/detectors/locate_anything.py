@@ -140,7 +140,7 @@ def _ensure_locate_deps() -> None:
             print("=" * 74)
             print(f"⚠️  transformers {v} KHÔNG khớp — LocateAnything-3B cần 4.57.1.")
             print("   Chạy 1 cell RỒI RESTART KERNEL, sau đó chạy lại run_eval:")
-            print('     !pip install -q "transformers==4.57.1" "tokenizers>=0.20,<0.22" accelerate')
+            print('     !pip install -q "transformers==4.57.1" accelerate')
             print("=" * 74)
     except Exception:
         pass
