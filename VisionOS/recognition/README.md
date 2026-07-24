@@ -123,6 +123,42 @@ từng bài.
 
 ---
 
+## Đánh giá độ chính xác zero-shot trên COCO (`run_eval.py`) — Kaggle T4
+
+Đo **Precision / Recall / F1 @ IoU** và **MAE đếm** của LocateAnything-3B trên
+ảnh COCO val2017 có nhãn (person / car / bottle). Đây là "điểm số thật".
+
+> ⚠️ **GHIM `transformers==4.57.1`** — đúng bản NVIDIA test. Bản mới hơn đổi loạt
+> API nội bộ (`rope_theta`, tied-weights, `DynamicCache.to_legacy_cache`…) khiến
+> code bundled của model vỡ. Ghim bản này là cách bền vững nhất.
+
+**Cell cài đặt cho Kaggle (chạy 1 lần, rồi RESTART kernel):**
+
+```bash
+# Python 3.12 của Kaggle KHÔNG có wheel decord gốc → dùng eva-decord.
+# KHÔNG ghim tokenizers (để pip tự giải, tránh xung đột với transformers 4.57.1).
+!pip uninstall -y opencv-python opencv-contrib-python opencv-python-headless -q
+!pip install -q -U "numpy<2.0.0" "transformers==4.57.1" accelerate \
+    "opencv-python-headless==4.11.0.86" "Pillow==11.1.0" eva-decord lmdb
+```
+
+Sau khi cài xong **Restart kernel** (Kaggle: *Run → Restart & Clear Cell Outputs*),
+rồi chạy:
+
+```bash
+# Kiểm tra bộ đánh giá KHÔNG cần GPU/model:
+python run_eval.py --selftest
+
+# Đánh giá thật trên COCO (tự tải ảnh + nhãn), lưu ảnh dự đoán tô màu TP/FP/FN:
+python run_eval.py --model locate --classes person car bottle \
+    --n 50 --iou 0.5 --dedup-iou 0.9 --save-dir eval_out
+```
+
+Ảnh minh hoạ trong `eval_out/` tô: **xanh lá = TP**, **đỏ = FP (thừa)**,
+**vàng = GT bị bỏ sót (FN)** — để thấy rõ model sai ở đâu.
+
+---
+
 ## Ví dụ dùng như thư viện
 
 ```python
