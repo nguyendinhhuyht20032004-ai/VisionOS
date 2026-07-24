@@ -22,7 +22,7 @@ __all__ = ["LocateAnythingDetector", "patch_modeling_source"]
 def patch_modeling_source(code: str) -> str:
     """Vá nội dung các file model (thuần chuỗi → test được).
 
-    Bốn vá, đều **idempotent** (vá lại lần nữa không đổi):
+    Năm vá, đều **idempotent** (vá lại lần nữa không đổi):
 
     1. **T4 (Turing) không có bfloat16 kernel** → ép ``pixel_values`` sang float16.
     2. ``import decord`` / ``import lmdb`` ở đầu file khiến
@@ -33,6 +33,11 @@ def patch_modeling_source(code: str) -> str:
        → dùng ``getattr`` với giá trị mặc định 1_000_000.0 (chuẩn Qwen2).
     4. **``DynamicCache.to_legacy_cache()`` bị GỠ ở transformers mới** → bỏ lời gọi,
        trả thẳng đối tượng ``Cache`` (định dạng chuẩn của bản mới).
+    5. **``DynamicCache.from_legacy_cache()`` cũng bị GỠ** → thay bằng tạo
+       ``DynamicCache()`` rỗng (chỉ chạy ở bước đầu generate khi cache là None).
+
+    Vá 4+5 làm luồng cache **độc lập phiên bản**: chạy được dù transformers là
+    4.57.1 (NVIDIA test) hay bản mới hơn (Kaggle mặc định).
     """
     import re
 
@@ -65,6 +70,16 @@ def patch_modeling_source(code: str) -> str:
     # bản mới; vòng lặp generate sau đó nhận Cache và không cần convert nữa.
     # Idempotent: sau khi thay, không còn ".to_legacy_cache()" để khớp.
     code = re.sub(r"(\w+)\.to_legacy_cache\(\)", r"\1", code)
+    # from_legacy_cache(): cũng bị gỡ ở transformers mới. Dòng
+    # ``DynamicCache.from_legacy_cache(x)`` chỉ chạy khi x KHÔNG phải Cache — trong
+    # vòng generate thì đó là bước đầu, x là None → tạo DynamicCache() rỗng; nếu x
+    # đã có sẵn (Cache/tuple) thì giữ nguyên. Idempotent: chuỗi from_legacy_cache
+    # biến mất sau khi thay nên lần vá sau không còn khớp.
+    code = re.sub(
+        r"DynamicCache\.from_legacy_cache\((\w+)\)",
+        r"(DynamicCache() if \1 is None else \1)",
+        code,
+    )
     return code
 
 

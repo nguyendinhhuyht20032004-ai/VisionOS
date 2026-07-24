@@ -64,6 +64,8 @@ CACHE_SNIPPET = (
     "if use_legacy_cache else next_decoder_cache\n"
 )
 
+FROM_CACHE_SNIPPET = "        past_key_values = DynamicCache.from_legacy_cache(past_key_values)\n"
+
 
 def test_to_legacy_cache_call_removed():
     out = patch_modeling_source(CACHE_SNIPPET)
@@ -72,8 +74,14 @@ def test_to_legacy_cache_call_removed():
     assert "next_cache = next_decoder_cache if use_legacy_cache else next_decoder_cache" in out
 
 
+def test_from_legacy_cache_replaced_with_empty_ctor():
+    out = patch_modeling_source(FROM_CACHE_SNIPPET)
+    assert "from_legacy_cache" not in out          # hàm cũ đã bị thay
+    assert "DynamicCache() if past_key_values is None else past_key_values" in out
+
+
 def test_idempotent():
-    combined = SAMPLE + QWEN2_SNIPPET + CACHE_SNIPPET
+    combined = SAMPLE + QWEN2_SNIPPET + CACHE_SNIPPET + FROM_CACHE_SNIPPET
     once = patch_modeling_source(combined)
     twice = patch_modeling_source(once)
     assert once == twice   # vá lại không đổi (an toàn khi load nhiều lần)

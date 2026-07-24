@@ -35,10 +35,17 @@ class LocateAnythingDetector:
     # ------------------------------------------------------------------ #
     def load(self):
         import torch
+        import transformers
         from transformers import AutoConfig, AutoModel, AutoProcessor, AutoTokenizer
 
         self._torch = torch
         self.dtype = torch.float16  # T4 (Turing) không có bfloat16 kernel
+
+        # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
+        # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
+        # đúng phiên bản giúp chẩn đoán nhanh khi có sự cố.
+        print(f"🔧 transformers=={transformers.__version__} · torch=={torch.__version__} "
+              f"· CUDA {torch.cuda.is_available()}")
 
         # Compat shim cho transformers MỚI hơn 4.57.1 (bản NVIDIA test model).
         # Model bundle sẵn modeling_qwen2.py / modeling_locateanything.py viết cho
