@@ -16,7 +16,184 @@ from typing import Optional
 
 from ..base import BoundingBox, Detection, DetectorResult
 
-__all__ = ["LocateAnythingDetector"]
+__all__ = ["LocateAnythingDetector", "patch_modeling_source"]
+
+
+def patch_modeling_source(code: str) -> str:
+    """Vá nội dung các file model (thuần chuỗi → test được).
+
+    Bốn vá, đều **idempotent** (vá lại lần nữa không đổi):
+
+    1. ``import decord`` / ``import lmdb`` ở đầu file khiến
+       ``transformers.check_imports`` **bắt buộc** cài 2 gói này (decord không có
+       wheel cho Python 3.12 → lỗi). Chúng chỉ dùng cho video/dataset, KHÔNG cần
+       khi suy luận ảnh → bọc vào ``try/except`` để check_imports bỏ qua.
+    2. **``config.rope_theta`` không có trong ``Qwen2Config`` của transformers cũ**
+       → dùng ``getattr`` với giá trị mặc định 1_000_000.0 (chuẩn Qwen2).
+    3. **``DynamicCache.to_legacy_cache()`` bị GỠ ở transformers mới** → bỏ lời gọi,
+       trả thẳng đối tượng ``Cache`` (định dạng chuẩn của bản mới).
+    4. **``DynamicCache.from_legacy_cache()`` cũng bị GỠ** → dòng ngay sau đó gọi
+       ``past_key_values.get_seq_length()`` nên KẾT QUẢ phải là một ``Cache``. Thay
+       bằng: đã là Cache thì giữ, còn ``None``/tuple rỗng (bước đầu generate) thì tạo
+       ``DynamicCache()`` rỗng. Dùng ``hasattr(x, 'get_seq_length')`` để nhận diện.
+
+    Vá 3+4 làm luồng cache **độc lập phiên bản**: chạy được dù transformers là
+    4.57.1 (NVIDIA test) hay bản mới hơn (Kaggle mặc định).
+
+    KHÔNG còn ép ``pixel_values`` sang float16 nữa: model gốc đã
+    ``pixel_values.to(self.language_model.dtype)`` — tự khớp dtype khi nạp (bf16
+    là mặc định; float16 gây tràn → CUBLAS_STATUS_INTERNAL_ERROR ở MLP).
+    """
+    import re
+
+    # chỉ khớp import ở CỘT 0 (top-level) → sau khi bọc vào try (thụt lề) sẽ không
+    # khớp nữa ⇒ idempotent.
+    code = re.sub(
+        r"(?m)^(import (?:decord|lmdb)\b.*)$",
+        "try:\n    \\1\nexcept Exception:\n    pass",
+        code,
+    )
+    code = re.sub(
+        r"(?m)^(from (?:decord|lmdb)\b.*)$",
+        "try:\n    \\1\nexcept Exception:\n    pass",
+        code,
+    )
+    # rope_theta: Qwen2Config cũ không set attribute này dù config.json có.
+    # getattr với default 1_000_000.0 (Qwen2 standard) → idempotent vì pattern
+    # đã đổi, lần vá sau không còn khớp chuỗi gốc nữa.
+    code = code.replace(
+        "self.rope_theta = config.rope_theta",
+        "self.rope_theta = getattr(config, 'rope_theta', 1_000_000.0)",
+    )
+    # to_legacy_cache(): transformers mới đã gỡ hàm này khỏi DynamicCache. Bundled
+    # Qwen2 gọi ``next_decoder_cache.to_legacy_cache()`` để quy về tuple cũ → lỗi.
+    # Bỏ lời gọi (X.to_legacy_cache() → X): trả thẳng đối tượng Cache là ĐÚNG với
+    # bản mới; vòng lặp generate sau đó nhận Cache và không cần convert nữa.
+    # Idempotent: sau khi thay, không còn ".to_legacy_cache()" để khớp.
+    code = re.sub(r"(\w+)\.to_legacy_cache\(\)", r"\1", code)
+    # from_legacy_cache(): cũng bị gỡ ở transformers mới. Dòng ngay sau nó gọi
+    # ``x.get_seq_length()`` nên x PHẢI là Cache. Trong vòng generate, dòng này chỉ
+    # chạy ở bước đầu khi x là None HOẶC tuple rỗng () → cả hai đều cần tạo
+    # DynamicCache() rỗng; nếu x đã là Cache thì giữ nguyên. Nhận diện bằng
+    # ``hasattr(x, 'get_seq_length')`` (chỉ Cache mới có).
+    #
+    # Chuẩn hoá CẢ HAI dạng để an toàn khi snapshot đã bị bản vá TRƯỚC sửa 1 lần:
+    #   (a) dạng gốc:      DynamicCache.from_legacy_cache(x)
+    #   (b) dạng vá cũ:    (DynamicCache() if x is None else x)   ← thiếu, gây lỗi tuple
+    # → cùng đưa về:       (x if hasattr(x, 'get_seq_length') else DynamicCache())
+    _cache_fix = r"(\1 if hasattr(\1, 'get_seq_length') else DynamicCache())"
+    code = re.sub(r"DynamicCache\.from_legacy_cache\((\w+)\)", _cache_fix, code)
+    code = re.sub(r"\(DynamicCache\(\) if (\w+) is None else \1\)", _cache_fix, code)
+
+    # RoPE cache auto-extend: bundled Qwen2RotaryEmbedding tạo cos/sin cache 1 lần
+    # với max_position_embeddings từ config (có thể rất NHỎ). Khi seq_len thực tế
+    # (ảnh + text tokens) vượt quá, apply_rotary_pos_emb báo IndexError. Vá
+    # forward() của RotaryEmbedding để tự mở rộng cache khi cần — cách tương tự
+    # transformers mới xử lý (trước 4.46 phải gọi thủ công _set_cos_sin_cache).
+    #
+    # Thay thế pattern: nếu forward() kiểm tra seq_len > max_seq_len_cached, đảm bảo
+    # nó cũng kiểm tra khi chưa có cache (lần đầu hoặc bị clear). Idempotent vì
+    # pattern gốc chỉ khớp 1 lần.
+    code = code.replace(
+        "if seq_len > self.max_seq_len_cached",
+        "if seq_len > self.max_seq_len_cached or not hasattr(self, '_cos_cached') or self._cos_cached is None",
+    )
+    return code
+
+
+def _prepare_model_dir(model_id: str) -> str:
+    """Tải snapshot model (hoặc dùng thư mục local) + vá modeling file + xoá cache.
+
+    Trả về đường dẫn thư mục model đã vá để nạp bằng ``trust_remote_code``.
+    """
+    import os
+    import shutil
+
+    if os.path.isdir(model_id):
+        model_dir = model_id
+    else:
+        from huggingface_hub import snapshot_download
+
+        model_dir = snapshot_download(model_id)
+
+    # Xoá cache module động để bản vá có hiệu lực.
+    mc = os.path.expanduser("~/.cache/huggingface/modules/transformers_modules")
+    if os.path.isdir(mc):
+        shutil.rmtree(mc, ignore_errors=True)
+
+    # Vá TẤT CẢ file .py trong snapshot: decord/lmdb có thể nằm ở file processor /
+    # image_processor (không chỉ modeling_locateanything.py) — chính là chỗ
+    # AutoProcessor.from_pretrained gọi check_imports và crash.
+    n = _patch_py_files(model_dir)
+    if n:
+        print(f"✅ Đã vá {n} file model (T4 float16 + gỡ ràng buộc decord/lmdb)")
+    return model_dir
+
+
+def _patch_py_files(model_dir: str) -> int:
+    """Áp :func:`patch_modeling_source` cho MỌI file .py trong ``model_dir``.
+
+    Trả về số file thực sự bị thay đổi. An toàn khi gọi lại (idempotent).
+    """
+    import glob
+    import os
+
+    changed = 0
+    for path in glob.glob(os.path.join(model_dir, "*.py")):
+        real = os.path.realpath(path)
+        try:
+            with open(real, encoding="utf-8") as fh:
+                code = fh.read()
+        except OSError:
+            continue
+        patched = patch_modeling_source(code)
+        if patched != code:
+            try:
+                with open(real, "w", encoding="utf-8") as fh:
+                    fh.write(patched)
+                changed += 1
+            except OSError:
+                pass
+    return changed
+
+
+def _ensure_locate_deps() -> None:
+    """Cài phụ thuộc runtime cho LocateAnything nếu THIẾU (Kaggle có Internet).
+
+    ``decord`` không có wheel cho Python 3.12 → dùng ``eva-decord`` (drop-in, vẫn
+    ``import decord``). ``lmdb`` có wheel sẵn. Đây là lớp bảo hiểm: kể cả không có
+    2 gói này, bản vá try/except vẫn giúp chạy được khi suy luận ảnh.
+    """
+    import importlib
+
+    need = []
+    for module, pkg in (("decord", "eva-decord"), ("lmdb", "lmdb")):
+        try:
+            importlib.import_module(module)
+        except Exception:
+            need.append(pkg)
+    if need:
+        import subprocess
+        import sys
+
+        print(f"📦 Cài phụ thuộc còn thiếu cho LocateAnything: {need} ...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", *need], check=False)
+
+    # Cảnh báo phiên bản transformers: model được NVIDIA test với ĐÚNG 4.57.1.
+    # Bản khác gây lỗi kiểu 'Qwen2Config has no attribute rope_theta'. Đổi phiên
+    # bản cần RESTART kernel nên chỉ cảnh báo, không tự cài (tránh nửa vời).
+    try:
+        import transformers
+
+        v = transformers.__version__
+        if not v.startswith("4.57"):
+            print("=" * 74)
+            print(f"⚠️  transformers {v} KHÔNG khớp — LocateAnything-3B cần 4.57.1.")
+            print("   Chạy 1 cell RỒI RESTART KERNEL, sau đó chạy lại run_eval:")
+            print('     !pip install -q "transformers==4.57.1" accelerate')
+            print("=" * 74)
+    except Exception:
+        pass
 
 
 class LocateAnythingDetector:
@@ -31,7 +208,12 @@ class LocateAnythingDetector:
         # Import lazy: chỉ cần khi chạy model thật (kéo theo torch/transformers).
         from la_counting.detector import LocateAnythingDetector as _LA
 
-        self._impl = _LA(self.model_dir, self.max_new_tokens)
+        # (1) Cài decord(eva-decord)/lmdb nếu thiếu — lớp bảo hiểm chính.
+        _ensure_locate_deps()
+        # (2) Tải + vá MỌI file .py của model (T4 float16 + gỡ ràng buộc
+        # decord/lmdb ở cả file processor) rồi load từ thư mục cục bộ đã vá.
+        local_dir = _prepare_model_dir(self.model_dir)
+        self._impl = _LA(local_dir, self.max_new_tokens)
         self._impl.load()
         return self
 
