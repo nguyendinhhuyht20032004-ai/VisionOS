@@ -1,6 +1,8 @@
 """Test bản vá modeling file của LocateAnything (thuần chuỗi, không cần model)."""
 
-from recognition.detectors.locate_anything import patch_modeling_source
+import os
+
+from recognition.detectors.locate_anything import _patch_py_files, patch_modeling_source
 
 SAMPLE = """\
 import torch
@@ -47,3 +49,31 @@ def test_idempotent():
     once = patch_modeling_source(SAMPLE)
     twice = patch_modeling_source(once)
     assert once == twice   # vá lại không đổi (an toàn khi load nhiều lần)
+
+
+# --------------------------------------------------------------------------- #
+# _patch_py_files: vá MỌI file .py (kể cả processor) — đây là lỗi đã gặp
+# --------------------------------------------------------------------------- #
+def test_patch_all_py_files_covers_processor(tmp_path):
+    # file processor (chính chỗ AutoProcessor.from_pretrained crash) có import decord
+    (tmp_path / "processing_locateanything.py").write_text("import decord\nimport lmdb\n")
+    (tmp_path / "modeling_locateanything.py").write_text(
+        "import torch\npixel_values = pixel_values.to(self.language_model.dtype)\n"
+    )
+    (tmp_path / "other.py").write_text("import torch\nimport numpy as np\n")
+
+    changed = _patch_py_files(str(tmp_path))
+    assert changed == 2   # processor + modeling đổi; other.py không
+
+    proc = (tmp_path / "processing_locateanything.py").read_text()
+    assert "try:\n    import decord" in proc and "try:\n    import lmdb" in proc
+    assert not any(line == "import decord" for line in proc.splitlines())
+
+    model = (tmp_path / "modeling_locateanything.py").read_text()
+    assert "pixel_values.to(torch.float16)" in model
+
+    other = (tmp_path / "other.py").read_text()
+    assert other == "import torch\nimport numpy as np\n"   # không đụng
+
+    # gọi lại: không còn gì để đổi (idempotent)
+    assert _patch_py_files(str(tmp_path)) == 0

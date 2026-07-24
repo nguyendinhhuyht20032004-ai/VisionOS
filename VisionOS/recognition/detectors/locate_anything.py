@@ -71,17 +71,64 @@ def _prepare_model_dir(model_id: str) -> str:
     if os.path.isdir(mc):
         shutil.rmtree(mc, ignore_errors=True)
 
-    f = os.path.join(model_dir, "modeling_locateanything.py")
-    if os.path.exists(f):
-        real = os.path.realpath(f)
-        with open(real) as fh:
-            code = fh.read()
+    # Vá TẤT CẢ file .py trong snapshot: decord/lmdb có thể nằm ở file processor /
+    # image_processor (không chỉ modeling_locateanything.py) — chính là chỗ
+    # AutoProcessor.from_pretrained gọi check_imports và crash.
+    n = _patch_py_files(model_dir)
+    if n:
+        print(f"✅ Đã vá {n} file model (T4 float16 + gỡ ràng buộc decord/lmdb)")
+    return model_dir
+
+
+def _patch_py_files(model_dir: str) -> int:
+    """Áp :func:`patch_modeling_source` cho MỌI file .py trong ``model_dir``.
+
+    Trả về số file thực sự bị thay đổi. An toàn khi gọi lại (idempotent).
+    """
+    import glob
+    import os
+
+    changed = 0
+    for path in glob.glob(os.path.join(model_dir, "*.py")):
+        real = os.path.realpath(path)
+        try:
+            with open(real, encoding="utf-8") as fh:
+                code = fh.read()
+        except OSError:
+            continue
         patched = patch_modeling_source(code)
         if patched != code:
-            with open(real, "w") as fh:
-                fh.write(patched)
-            print("✅ Đã vá modeling file (T4 float16 + gỡ ràng buộc decord/lmdb)")
-    return model_dir
+            try:
+                with open(real, "w", encoding="utf-8") as fh:
+                    fh.write(patched)
+                changed += 1
+            except OSError:
+                pass
+    return changed
+
+
+def _ensure_locate_deps() -> None:
+    """Cài phụ thuộc runtime cho LocateAnything nếu THIẾU (Kaggle có Internet).
+
+    ``decord`` không có wheel cho Python 3.12 → dùng ``eva-decord`` (drop-in, vẫn
+    ``import decord``). ``lmdb`` có wheel sẵn. Đây là lớp bảo hiểm: kể cả không có
+    2 gói này, bản vá try/except vẫn giúp chạy được khi suy luận ảnh.
+    """
+    import importlib
+
+    need = []
+    for module, pkg in (("decord", "eva-decord"), ("lmdb", "lmdb")):
+        try:
+            importlib.import_module(module)
+        except Exception:
+            need.append(pkg)
+    if not need:
+        return
+    import subprocess
+    import sys
+
+    print(f"📦 Cài phụ thuộc còn thiếu cho LocateAnything: {need} ...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *need], check=False)
 
 
 class LocateAnythingDetector:
@@ -96,10 +143,10 @@ class LocateAnythingDetector:
         # Import lazy: chỉ cần khi chạy model thật (kéo theo torch/transformers).
         from la_counting.detector import LocateAnythingDetector as _LA
 
-        # Tải + vá modeling file (T4 float16 + gỡ ràng buộc decord/lmdb) rồi load
-        # từ thư mục cục bộ đã vá — nhờ vậy chạy được trên Kaggle T4 mà KHÔNG cần
-        # cài decord/lmdb (hai gói này chỉ dùng cho video/dataset, không cần khi
-        # suy luận ảnh).
+        # (1) Cài decord(eva-decord)/lmdb nếu thiếu — lớp bảo hiểm chính.
+        _ensure_locate_deps()
+        # (2) Tải + vá MỌI file .py của model (T4 float16 + gỡ ràng buộc
+        # decord/lmdb ở cả file processor) rồi load từ thư mục cục bộ đã vá.
         local_dir = _prepare_model_dir(self.model_dir)
         self._impl = _LA(local_dir, self.max_new_tokens)
         self._impl.load()
