@@ -59,8 +59,21 @@ def test_rope_theta_patched_to_getattr():
     assert "config.rope_theta" not in out
 
 
+CACHE_SNIPPET = (
+    "next_cache = next_decoder_cache.to_legacy_cache() "
+    "if use_legacy_cache else next_decoder_cache\n"
+)
+
+
+def test_to_legacy_cache_call_removed():
+    out = patch_modeling_source(CACHE_SNIPPET)
+    assert ".to_legacy_cache()" not in out         # lời gọi đã bị gỡ
+    # X.to_legacy_cache() -> X ⇒ hai nhánh ternary đều là next_decoder_cache
+    assert "next_cache = next_decoder_cache if use_legacy_cache else next_decoder_cache" in out
+
+
 def test_idempotent():
-    combined = SAMPLE + QWEN2_SNIPPET
+    combined = SAMPLE + QWEN2_SNIPPET + CACHE_SNIPPET
     once = patch_modeling_source(combined)
     twice = patch_modeling_source(once)
     assert once == twice   # vá lại không đổi (an toàn khi load nhiều lần)

@@ -22,7 +22,7 @@ __all__ = ["LocateAnythingDetector", "patch_modeling_source"]
 def patch_modeling_source(code: str) -> str:
     """Vá nội dung các file model (thuần chuỗi → test được).
 
-    Ba vá, đều **idempotent** (vá lại lần nữa không đổi):
+    Bốn vá, đều **idempotent** (vá lại lần nữa không đổi):
 
     1. **T4 (Turing) không có bfloat16 kernel** → ép ``pixel_values`` sang float16.
     2. ``import decord`` / ``import lmdb`` ở đầu file khiến
@@ -31,6 +31,8 @@ def patch_modeling_source(code: str) -> str:
        khi suy luận ảnh → bọc vào ``try/except`` để check_imports bỏ qua.
     3. **``config.rope_theta`` không có trong ``Qwen2Config`` của transformers cũ**
        → dùng ``getattr`` với giá trị mặc định 1_000_000.0 (chuẩn Qwen2).
+    4. **``DynamicCache.to_legacy_cache()`` bị GỠ ở transformers mới** → bỏ lời gọi,
+       trả thẳng đối tượng ``Cache`` (định dạng chuẩn của bản mới).
     """
     import re
 
@@ -57,6 +59,12 @@ def patch_modeling_source(code: str) -> str:
         "self.rope_theta = config.rope_theta",
         "self.rope_theta = getattr(config, 'rope_theta', 1_000_000.0)",
     )
+    # to_legacy_cache(): transformers mới đã gỡ hàm này khỏi DynamicCache. Bundled
+    # Qwen2 gọi ``next_decoder_cache.to_legacy_cache()`` để quy về tuple cũ → lỗi.
+    # Bỏ lời gọi (X.to_legacy_cache() → X): trả thẳng đối tượng Cache là ĐÚNG với
+    # bản mới; vòng lặp generate sau đó nhận Cache và không cần convert nữa.
+    # Idempotent: sau khi thay, không còn ".to_legacy_cache()" để khớp.
+    code = re.sub(r"(\w+)\.to_legacy_cache\(\)", r"\1", code)
     return code
 
 
