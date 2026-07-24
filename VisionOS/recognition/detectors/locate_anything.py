@@ -84,6 +84,20 @@ def patch_modeling_source(code: str) -> str:
     _cache_fix = r"(\1 if hasattr(\1, 'get_seq_length') else DynamicCache())"
     code = re.sub(r"DynamicCache\.from_legacy_cache\((\w+)\)", _cache_fix, code)
     code = re.sub(r"\(DynamicCache\(\) if (\w+) is None else \1\)", _cache_fix, code)
+
+    # RoPE cache auto-extend: bundled Qwen2RotaryEmbedding tạo cos/sin cache 1 lần
+    # với max_position_embeddings từ config (có thể rất NHỎ). Khi seq_len thực tế
+    # (ảnh + text tokens) vượt quá, apply_rotary_pos_emb báo IndexError. Vá
+    # forward() của RotaryEmbedding để tự mở rộng cache khi cần — cách tương tự
+    # transformers mới xử lý (trước 4.46 phải gọi thủ công _set_cos_sin_cache).
+    #
+    # Thay thế pattern: nếu forward() kiểm tra seq_len > max_seq_len_cached, đảm bảo
+    # nó cũng kiểm tra khi chưa có cache (lần đầu hoặc bị clear). Idempotent vì
+    # pattern gốc chỉ khớp 1 lần.
+    code = code.replace(
+        "if seq_len > self.max_seq_len_cached",
+        "if seq_len > self.max_seq_len_cached or not hasattr(self, '_cos_cached') or self._cos_cached is None",
+    )
     return code
 
 

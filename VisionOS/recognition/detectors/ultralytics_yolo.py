@@ -40,7 +40,18 @@ class UltralyticsYoloDetector:
         self._names = None
 
     def load(self):
-        from ultralytics import YOLO
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            import subprocess
+            import sys
+
+            print("📦 ultralytics chưa cài → đang cài...")
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", "ultralytics"],
+                check=True,
+            )
+            from ultralytics import YOLO
 
         t0 = time.time()
         self._model = YOLO(self.weights)      # tự tải weight lần đầu

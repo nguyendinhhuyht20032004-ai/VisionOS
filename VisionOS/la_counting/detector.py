@@ -214,6 +214,12 @@ class LocateAnythingDetector:
             inputs = proc(text=[text], images=[pil_image], return_tensors="pt")
         inputs = {k: self._prep_input(v) for k, v in inputs.items()}
 
+        # KHÔNG truyền position_ids vào generate(): processor tạo position_ids dựa
+        # trên toàn bộ input (ảnh + text) nhưng bundled model tính RoPE cos/sin cache
+        # nội bộ với max_position_embeddings NHỎ hơn → index out of bounds. Bỏ để
+        # model tự tính position_ids phù hợp với RoPE cache của nó.
+        inputs.pop("position_ids", None)
+
         # generate() TÙY BIẾN của model: cần generation_mode="hybrid" (mặc định của
         # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
         # kwargs có thể không được nhận ở bản generate này → thử rồi rút gọn dần.
