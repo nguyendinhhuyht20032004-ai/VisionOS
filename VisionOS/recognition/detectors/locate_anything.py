@@ -16,7 +16,72 @@ from typing import Optional
 
 from ..base import BoundingBox, Detection, DetectorResult
 
-__all__ = ["LocateAnythingDetector"]
+__all__ = ["LocateAnythingDetector", "patch_modeling_source"]
+
+
+def patch_modeling_source(code: str) -> str:
+    """Vá nội dung ``modeling_locateanything.py`` (thuần chuỗi → test được).
+
+    Hai vá, đều **idempotent** (vá lại lần nữa không đổi):
+
+    1. **T4 (Turing) không có bfloat16 kernel** → ép ``pixel_values`` sang float16.
+    2. ``import decord`` / ``import lmdb`` ở đầu file khiến
+       ``transformers.check_imports`` **bắt buộc** cài 2 gói này (decord không có
+       wheel cho Python 3.12 → lỗi). Chúng chỉ dùng cho video/dataset, KHÔNG cần
+       khi suy luận ảnh → bọc vào ``try/except`` để check_imports bỏ qua.
+    """
+    import re
+
+    code = code.replace(
+        "pixel_values = pixel_values.to(self.language_model.dtype)",
+        "pixel_values = pixel_values.to(torch.float16)  # T4 fix",
+    )
+    # chỉ khớp import ở CỘT 0 (top-level) → sau khi bọc vào try (thụt lề) sẽ không
+    # khớp nữa ⇒ idempotent.
+    code = re.sub(
+        r"(?m)^(import (?:decord|lmdb)\b.*)$",
+        "try:\n    \\1\nexcept Exception:\n    pass",
+        code,
+    )
+    code = re.sub(
+        r"(?m)^(from (?:decord|lmdb)\b.*)$",
+        "try:\n    \\1\nexcept Exception:\n    pass",
+        code,
+    )
+    return code
+
+
+def _prepare_model_dir(model_id: str) -> str:
+    """Tải snapshot model (hoặc dùng thư mục local) + vá modeling file + xoá cache.
+
+    Trả về đường dẫn thư mục model đã vá để nạp bằng ``trust_remote_code``.
+    """
+    import os
+    import shutil
+
+    if os.path.isdir(model_id):
+        model_dir = model_id
+    else:
+        from huggingface_hub import snapshot_download
+
+        model_dir = snapshot_download(model_id)
+
+    # Xoá cache module động để bản vá có hiệu lực.
+    mc = os.path.expanduser("~/.cache/huggingface/modules/transformers_modules")
+    if os.path.isdir(mc):
+        shutil.rmtree(mc, ignore_errors=True)
+
+    f = os.path.join(model_dir, "modeling_locateanything.py")
+    if os.path.exists(f):
+        real = os.path.realpath(f)
+        with open(real) as fh:
+            code = fh.read()
+        patched = patch_modeling_source(code)
+        if patched != code:
+            with open(real, "w") as fh:
+                fh.write(patched)
+            print("✅ Đã vá modeling file (T4 float16 + gỡ ràng buộc decord/lmdb)")
+    return model_dir
 
 
 class LocateAnythingDetector:
@@ -31,7 +96,12 @@ class LocateAnythingDetector:
         # Import lazy: chỉ cần khi chạy model thật (kéo theo torch/transformers).
         from la_counting.detector import LocateAnythingDetector as _LA
 
-        self._impl = _LA(self.model_dir, self.max_new_tokens)
+        # Tải + vá modeling file (T4 float16 + gỡ ràng buộc decord/lmdb) rồi load
+        # từ thư mục cục bộ đã vá — nhờ vậy chạy được trên Kaggle T4 mà KHÔNG cần
+        # cài decord/lmdb (hai gói này chỉ dùng cho video/dataset, không cần khi
+        # suy luận ảnh).
+        local_dir = _prepare_model_dir(self.model_dir)
+        self._impl = _LA(local_dir, self.max_new_tokens)
         self._impl.load()
         return self
 
