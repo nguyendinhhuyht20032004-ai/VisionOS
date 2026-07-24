@@ -47,11 +47,9 @@ class LocateAnythingDetector:
         self._cpu_debug = bool(os.environ.get("LA_DEBUG_CPU"))
         # DTYPE: model được huấn luyện ở bfloat16 (Qwen2/NVIDIA).
         # float16 (dải hẹp, max ~65504) dễ TRÀN ở MLP → CUBLAS_STATUS_INTERNAL_ERROR.
-        # bf16 ĐÚNG về mặt số nhưng SDPA kernel (cuBLAS) trên T4 (Turing, cc 7.5)
-        # CRASH vì T4 KHÔNG có tensor-core bf16 gốc → cublasSgemmStridedBatched fail.
-        # → Ampere+ (cc ≥ 8.0): dùng bf16 (nhanh, đúng).
-        # → T4/Turing (cc < 8.0): PHẢI dùng float32 (SDPA tương thích, ~12GB trên
-        #   T4 16GB). Cho phép LA_DTYPE=... để ép tay.
+        # float32 an toàn nhưng 3B×4B = ~12GB weights + activations → OOM trên T4 (15GB).
+        # → Giữ bf16 (~7GB, vừa T4) + ép SDPA math backend trên T4 (tự upcast f32
+        #   nội bộ khi tính attention, tránh CUBLAS crash). Cho phép LA_DTYPE ép tay.
         env_dtype = (os.environ.get("LA_DTYPE") or "").lower()
         if self._cpu_debug or not torch.cuda.is_available():
             self.dtype = torch.float32
@@ -59,17 +57,22 @@ class LocateAnythingDetector:
             self.dtype = torch.float16
         elif env_dtype in ("float32", "fp32"):
             self.dtype = torch.float32
-        elif env_dtype in ("bfloat16", "bf16"):
-            self.dtype = torch.bfloat16
         else:
-            # Tự chọn theo GPU: Ampere+ → bf16, T4/Turing → float32
+            self.dtype = torch.bfloat16  # mặc định: bf16 (dtype gốc của model)
+
+        # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
+        # T4 không có tensor-core bf16 gốc → cublasSgemmStridedBatched fail.
+        # Ép chỉ dùng "math" backend: backend này TỰ UPCAST sang float32 khi tính
+        # attention → kết quả đúng, tốn thêm chút VRAM tạm nhưng KHÔNG tải toàn bộ
+        # model lên float32 → vẫn ~7GB. Trên Ampere+ thì cả 3 backend đều OK.
+        if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
-            if cc[0] >= 8:  # Ampere, Hopper, Ada...
-                self.dtype = torch.bfloat16
-            else:  # Turing (T4 cc=7.5), Volta, Pascal...
-                self.dtype = torch.float32
-                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (< 8.0) → dùng float32 "
-                      f"(SDPA+bf16 crash trên Turing). Model ≈12GB, T4 16GB → vừa.")
+            if cc[0] < 8:  # Turing (T4), Volta, Pascal...
+                torch.backends.cuda.enable_flash_sdp(False)
+                torch.backends.cuda.enable_mem_efficient_sdp(False)
+                torch.backends.cuda.enable_math_sdp(True)
+                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → ép SDPA math backend "
+                      f"(tự upcast f32, tránh CUBLAS crash bf16).")
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
