@@ -160,8 +160,16 @@ class LocateAnythingDetector:
         w, h = pil_image.size
         max_tok = max_new_tokens or self.max_new_tokens
 
-        # Prompt CHÍNH THỨC của LocateAnything (ground_multi) — dùng đúng câu NVIDIA
-        # test để không rơi vào nhánh chưa kiểm thử.
+        # ------------------------------------------------------------------ #
+        # Dựng input ĐÚNG cách của LocateAnything (theo NVlabs/Eagle worker).
+        # LocateAnything có PROCESSOR RIÊNG (processing_locateanything.py) với:
+        #   * ``py_apply_chat_template`` — chèn đúng token ảnh <IMG_CONTEXT> theo
+        #     grid patch của ẢNH (KHÔNG phải ``apply_chat_template`` generic!),
+        #   * ``process_vision_info`` — tách ảnh/video ra khỏi messages.
+        # Dùng nhầm apply_chat_template generic → số token ảnh KHÔNG khớp số patch
+        # → input_ids/position_ids lệch → "vectorized_gather_kernel index out of
+        # bounds" (CUDA assert) đúng như lỗi đã gặp. Ảnh phải NẰM TRONG message.
+        # ------------------------------------------------------------------ #
         instruction = (
             f"Locate all the instances that match the following description: {prompt}."
         )
@@ -169,32 +177,59 @@ class LocateAnythingDetector:
             {
                 "role": "user",
                 "content": [
-                    {"type": "image"},
+                    {"type": "image", "image": pil_image},
                     {"type": "text", "text": instruction},
                 ],
             }
         ]
-        text_prompt = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        inputs = self.processor(
-            text=text_prompt, images=[pil_image], return_tensors="pt"
-        )
-        inputs = {k: self._prep_input(v) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            output = self.model.generate(
-                **inputs,
-                max_new_tokens=max_tok,
-                do_sample=False,
-                use_cache=True,
-                tokenizer=self.tokenizer,
+        proc = self.processor
+        if hasattr(proc, "py_apply_chat_template"):
+            text = proc.py_apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        else:
+            text = proc.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
             )
 
-        if isinstance(output, (list, tuple)) and hasattr(output[0], "shape"):
+        # text phải là LIST; ảnh lấy qua process_vision_info nếu có.
+        if hasattr(proc, "process_vision_info"):
+            images, videos = proc.process_vision_info(messages)
+            inputs = proc(text=[text], images=images, videos=videos, return_tensors="pt")
+        else:
+            inputs = proc(text=[text], images=[pil_image], return_tensors="pt")
+        inputs = {k: self._prep_input(v) for k, v in inputs.items()}
+
+        # generate() TÙY BIẾN của model: cần generation_mode="hybrid" (mặc định của
+        # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
+        # kwargs có thể không được nhận ở bản generate này → thử rồi rút gọn dần.
+        base = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True)
+        attempts = [
+            dict(base, generation_mode="hybrid", do_sample=False, repetition_penalty=1.05),
+            dict(base, generation_mode="hybrid", do_sample=False),
+            dict(base, generation_mode="hybrid"),
+            base,
+        ]
+        output, last_err = None, None
+        with torch.no_grad():
+            for kw in attempts:
+                try:
+                    output = self.model.generate(**kw)
+                    break
+                except TypeError as e:  # kwarg không được hỗ trợ → thử bộ gọn hơn
+                    last_err = e
+                    continue
+        if output is None:
+            raise last_err if last_err else RuntimeError("generate() thất bại")
+
+        # generate có thể trả token ids (tensor / list) hoặc chuỗi đã decode.
+        if isinstance(output, str):
+            raw = output
+        elif isinstance(output, (list, tuple)) and output and hasattr(output[0], "shape"):
             raw = self.tokenizer.decode(output[0], skip_special_tokens=True)
         elif hasattr(output, "shape"):
-            raw = self.tokenizer.decode(output, skip_special_tokens=True)
+            seq = output[0] if output.dim() > 1 else output
+            raw = self.tokenizer.decode(seq, skip_special_tokens=True)
         else:
             raw = str(output)
 
