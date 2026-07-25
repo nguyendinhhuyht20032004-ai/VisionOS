@@ -60,103 +60,47 @@ class LocateAnythingDetector:
         else:
             self.dtype = torch.bfloat16  # mặc định: bf16 (dtype gốc của model)
 
-        # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
-        # T4 không có tensor-core bf16 gốc. Gọi math_sdp với float32 thì bị OOM/bug cuBLAS.
-        # Giải pháp TỐT NHẤT: Dùng float16 + mem_efficient_attention.
-        # LƯU Ý: Phải gọi .contiguous() trên q, k, v vì mem_efficient_attention trên
-        # PyTorch 2.1 bị lỗi device-side assert nếu input không liền mạch (non-contiguous)
-        # khi đi kèm với attention_mask.
+        # GIẢI PHÁP TỐI THƯỢNG CHO KAGGLE T4 (Turing cc 7.5):
+        # 1. bfloat16 trên T4 dùng software emulation -> Gây random "device-side assert" ở Conv2d, Linear, RoPE.
+        # 2. float32 toàn bộ model -> Gây OOM (Out Of Memory) vì 3B model = 12GB weights.
+        # 3. float16 toàn bộ model -> Chạy cực mượt bằng Tensor Cores, NHƯNG Qwen2 MLP bị tràn số (overflow > 65504) gây CUBLAS_INTERNAL_ERROR.
+        # => CÁCH GIẢI QUYẾT: Load toàn bộ model bằng float16, nhưng monkey-patch riêng Qwen2MLP tính toán bằng float32!
+        self.dtype = torch.float16
+
         if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
             if cc[0] < 8:  # Turing (T4), Volta, Pascal...
-                torch.backends.cuda.enable_flash_sdp(False)
-                torch.backends.cuda.enable_mem_efficient_sdp(True) # Bật xformers/cutlass fp16
-                torch.backends.cuda.enable_math_sdp(True)
+                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Kích hoạt Nuclear Fix: float16 model + float32 Qwen2MLP.")
                 
-                if self.dtype == torch.bfloat16:
-                    import torch.nn.functional as F
-                    if not getattr(F, "_la_patched_sdpa", False):
-                        _orig_sdpa = F.scaled_dot_product_attention
-                        def _ultimate_sdpa(*args, **kwargs):
-                            if len(args) >= 3 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
-                                import math
-                                q = args[0]
-                                k = args[1]
-                                v = args[2]
-                                
-                                original_ndim = q.ndim
-                                if original_ndim == 3:
-                                    q = q.unsqueeze(1)
-                                    k = k.unsqueeze(1)
-                                    v = v.unsqueeze(1)
-                                    
-                                bsz, num_heads, q_len, head_dim = q.shape
-                                _, _, k_len, _ = k.shape
-                                
-                                attn_mask = args[3] if len(args) >= 4 else kwargs.get("attn_mask", None)
-                                dropout_p = args[4] if len(args) >= 5 else kwargs.get("dropout_p", 0.0)
-                                is_causal = args[5] if len(args) >= 6 else kwargs.get("is_causal", False)
-                                scale = args[6] if len(args) >= 7 else kwargs.get("scale", None)
-                                
-                                gpu_device = q.device
-                                scale_factor = scale if scale is not None else (1.0 / math.sqrt(head_dim))
-                                causal_mask_cpu = None
-                                if is_causal:
-                                    causal_mask_cpu = torch.ones(q_len, k_len, dtype=torch.bool).tril(diagonal=0)
-                                    
-                                CHUNK_SIZE = 512
-                                out = torch.empty(bsz, num_heads, q_len, head_dim, dtype=torch.bfloat16, device=gpu_device)
-                                
-                                for b in range(bsz):
-                                    for h in range(num_heads):
-                                        # Chuyển sang CPU float32 - hoàn toàn bypass cuBLAS, dùng MKL/OpenBLAS
-                                        qh = q[b, h].to(dtype=torch.float32, device="cpu")
-                                        kh_T = k[b, h].to(dtype=torch.float32, device="cpu").transpose(-2, -1).contiguous()
-                                        vh = v[b, h].to(dtype=torch.float32, device="cpu")
-                                        
-                                        mask_bh_cpu = None
-                                        if attn_mask is not None:
-                                            if attn_mask.ndim == 4:
-                                                b_idx = b if attn_mask.size(0) > 1 else 0
-                                                h_idx = h if attn_mask.size(1) > 1 else 0
-                                                mask_bh_cpu = attn_mask[b_idx, h_idx].to(dtype=torch.float32, device="cpu")
-                                            elif attn_mask.ndim == 3:
-                                                b_idx = b if attn_mask.size(0) > 1 else 0
-                                                mask_bh_cpu = attn_mask[b_idx].to(dtype=torch.float32, device="cpu")
-                                            else:
-                                                mask_bh_cpu = attn_mask.to(dtype=torch.float32, device="cpu")
-                                                
-                                        out_bh_cpu = torch.empty(q_len, head_dim, dtype=torch.float32)
-                                        
-                                        for i in range(0, q_len, CHUNK_SIZE):
-                                            end_i = min(i + CHUNK_SIZE, q_len)
-                                            qh_chunk = qh[i:end_i]
-                                            
-                                            attn_chunk = torch.matmul(qh_chunk, kh_T) * scale_factor
-                                            
-                                            if causal_mask_cpu is not None:
-                                                attn_chunk = attn_chunk.masked_fill(~causal_mask_cpu[i:end_i], float("-inf"))
-                                                
-                                            if mask_bh_cpu is not None:
-                                                attn_chunk = attn_chunk + mask_bh_cpu[i:end_i]
-                                                
-                                            attn_chunk = torch.nn.functional.softmax(attn_chunk, dim=-1)
-                                            
-                                            if dropout_p > 0.0:
-                                                attn_chunk = torch.nn.functional.dropout(attn_chunk, p=dropout_p)
-                                                
-                                            out_bh_cpu[i:end_i] = torch.matmul(attn_chunk, vh)
-                                            
-                                        out[b, h] = out_bh_cpu.to(dtype=torch.bfloat16, device=gpu_device)
-                                
-                                if original_ndim == 3:
-                                    out = out.squeeze(1)
-                                return out
-                            return _orig_sdpa(*args, **kwargs)
-                        F.scaled_dot_product_attention = _ultimate_sdpa
-                        F._la_patched_sdpa = True
-                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Monkey-patch SDPA: "
-                      f"Dùng Eager loop-by-head + CHUNKED (fp32) để MIỄN NHIỄM với OOM & Overflow.")
+                # Bật Flash/MemEfficient SDPA thoải mái vì float16 được hỗ trợ native!
+                torch.backends.cuda.enable_flash_sdp(True)
+                torch.backends.cuda.enable_mem_efficient_sdp(True)
+                torch.backends.cuda.enable_math_sdp(True)
+
+                # Monkey-patch Qwen2MLP để chống tràn số float16
+                try:
+                    import transformers.models.qwen2.modeling_qwen2 as qwen2_model
+                    if not getattr(qwen2_model.Qwen2MLP, "_la_patched_mlp", False):
+                        _orig_mlp_forward = qwen2_model.Qwen2MLP.forward
+                        def _safe_mlp_forward(self_mlp, x):
+                            # Upcast lên float32 để tính toán, chống tràn số
+                            x_f32 = x.to(torch.float32)
+                            gate_w = self_mlp.gate_proj.weight.to(torch.float32)
+                            up_w = self_mlp.up_proj.weight.to(torch.float32)
+                            down_w = self_mlp.down_proj.weight.to(torch.float32)
+                            
+                            gate = torch.nn.functional.linear(x_f32, gate_w)
+                            up = torch.nn.functional.linear(x_f32, up_w)
+                            
+                            inter = self_mlp.act_fn(gate) * up
+                            out = torch.nn.functional.linear(inter, down_w)
+                            
+                            return out.to(x.dtype)
+                        
+                        qwen2_model.Qwen2MLP.forward = _safe_mlp_forward
+                        qwen2_model.Qwen2MLP._la_patched_mlp = True
+                except Exception as e:
+                    print(f"⚠️  Lỗi khi patch Qwen2MLP: {e}")
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
