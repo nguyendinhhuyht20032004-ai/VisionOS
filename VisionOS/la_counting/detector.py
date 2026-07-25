@@ -79,48 +79,82 @@ class LocateAnythingDetector:
                         _orig_sdpa = F.scaled_dot_product_attention
                         def _ultimate_sdpa(*args, **kwargs):
                             if len(args) >= 3 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
-                                original_ndim = args[0].ndim
+                                import math
                                 q = args[0]
                                 k = args[1]
                                 v = args[2]
                                 
+                                original_ndim = q.ndim
                                 if original_ndim == 3:
                                     q = q.unsqueeze(1)
                                     k = k.unsqueeze(1)
                                     v = v.unsqueeze(1)
+                                    
+                                bsz, num_heads, q_len, head_dim = q.shape
+                                _, _, k_len, _ = k.shape
                                 
-                                # Cực kỳ quan trọng: phải .contiguous() TẤT CẢ tensor để tránh device-side assert
-                                q = q.to(torch.float16).contiguous()
-                                k = k.to(torch.float16).contiguous()
-                                v = v.to(torch.float16).contiguous()
+                                attn_mask = args[3] if len(args) >= 4 else kwargs.get("attn_mask", None)
+                                dropout_p = args[4] if len(args) >= 5 else kwargs.get("dropout_p", 0.0)
+                                is_causal = args[5] if len(args) >= 6 else kwargs.get("is_causal", False)
+                                scale = args[6] if len(args) >= 7 else kwargs.get("scale", None)
                                 
-                                new_args = [q, k, v] + list(args[3:])
+                                scale_factor = scale if scale is not None else (1.0 / math.sqrt(head_dim))
+                                out = torch.empty(bsz, num_heads, q_len, head_dim, dtype=torch.bfloat16, device=q.device)
                                 
-                                for i in range(3, len(new_args)):
-                                    if torch.is_tensor(new_args[i]):
-                                        if new_args[i].dtype == torch.bfloat16:
-                                            new_args[i] = new_args[i].to(torch.float16).contiguous()
-                                        else:
-                                            new_args[i] = new_args[i].contiguous()
+                                causal_mask = None
+                                if is_causal:
+                                    causal_mask = torch.ones(q_len, k_len, dtype=torch.bool, device=q.device).tril(diagonal=0)
+                                    
+                                CHUNK_SIZE = 1024 # Chia nhỏ q_len để tránh OOM
+                                
+                                for b in range(bsz):
+                                    for h in range(num_heads):
+                                        qh = q[b, h].to(torch.float32)
+                                        kh_T = k[b, h].to(torch.float32).transpose(-2, -1)
+                                        vh = v[b, h].to(torch.float32)
+                                        
+                                        if attn_mask is not None:
+                                            if attn_mask.ndim == 4:
+                                                b_idx = b if attn_mask.size(0) > 1 else 0
+                                                h_idx = h if attn_mask.size(1) > 1 else 0
+                                                mask_bh = attn_mask[b_idx, h_idx].to(torch.float32)
+                                            elif attn_mask.ndim == 3:
+                                                b_idx = b if attn_mask.size(0) > 1 else 0
+                                                mask_bh = attn_mask[b_idx].to(torch.float32)
+                                            else:
+                                                mask_bh = attn_mask.to(torch.float32)
+                                                
+                                        out_bh = torch.empty(q_len, head_dim, dtype=torch.float32, device=q.device)
+                                        
+                                        for i in range(0, q_len, CHUNK_SIZE):
+                                            end_i = min(i + CHUNK_SIZE, q_len)
+                                            qh_chunk = qh[i:end_i]
                                             
-                                for key, val in kwargs.items():
-                                    if torch.is_tensor(val):
-                                        if val.dtype == torch.bfloat16:
-                                            kwargs[key] = val.to(torch.float16).contiguous()
-                                        else:
-                                            kwargs[key] = val.contiguous()
-                                
-                                out = _orig_sdpa(*new_args, **kwargs)
+                                            attn_chunk = torch.matmul(qh_chunk, kh_T) * scale_factor
+                                            
+                                            if causal_mask is not None:
+                                                attn_chunk = attn_chunk.masked_fill(~causal_mask[i:end_i], float("-inf"))
+                                                
+                                            if attn_mask is not None:
+                                                attn_chunk = attn_chunk + mask_bh[i:end_i]
+                                                
+                                            attn_chunk = torch.nn.functional.softmax(attn_chunk, dim=-1)
+                                            
+                                            if dropout_p > 0.0:
+                                                attn_chunk = torch.nn.functional.dropout(attn_chunk, p=dropout_p)
+                                                
+                                            out_bh[i:end_i] = torch.matmul(attn_chunk, vh)
+                                            
+                                        out[b, h] = out_bh.to(torch.bfloat16)
                                 
                                 if original_ndim == 3:
                                     out = out.squeeze(1)
-                                    
-                                return out.to(torch.bfloat16)
+                                return out
                             return _orig_sdpa(*args, **kwargs)
                         F.scaled_dot_product_attention = _ultimate_sdpa
                         F._la_patched_sdpa = True
                 print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Monkey-patch SDPA: "
-                      f"Cast bf16 -> float16 + contiguous() để chạy mem_efficient_attention mượt mà.")
+                      f"Dùng Eager loop-by-head + CHUNKED (fp32) để MIỄN NHIỄM với OOM & Overflow.")
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
