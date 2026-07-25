@@ -192,11 +192,12 @@ class LocateAnythingDetector:
                     past_key_value=None,
                     output_attentions=False,
                     use_cache=False,
-                    cache_position=None,
                     **kwargs
                 ):
                     residual = hidden_states.to(torch.float32)
                     normed = self_layer.input_layernorm(hidden_states)
+                    
+                    # Do not pass cache_position explicitly, let kwargs handle it if it exists.
                     attn_outputs = self_layer.self_attn(
                         hidden_states=normed,
                         attention_mask=attention_mask,
@@ -204,7 +205,6 @@ class LocateAnythingDetector:
                         past_key_value=past_key_value,
                         output_attentions=output_attentions,
                         use_cache=use_cache,
-                        cache_position=cache_position,
                         **kwargs
                     )
                     attn_out = attn_outputs[0]
