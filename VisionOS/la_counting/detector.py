@@ -105,30 +105,31 @@ class LocateAnythingDetector:
                                 if is_causal:
                                     causal_mask = torch.ones(q_len, k_len, dtype=torch.bool, device=q.device).tril(diagonal=0)
                                     
-                                CHUNK_SIZE = 1024 # Chia nhỏ q_len để tránh OOM
+                                CHUNK_SIZE = 1024
                                 
                                 for b in range(bsz):
                                     for h in range(num_heads):
-                                        qh = q[b, h].to(torch.float32)
-                                        kh_T = k[b, h].to(torch.float32).transpose(-2, -1)
-                                        vh = v[b, h].to(torch.float32)
+                                        # Dùng float16 để kích hoạt Tensor Cores (cublasHgemm), né lỗi cublasSgemm của float32
+                                        qh = q[b, h].to(torch.float16).contiguous()
+                                        kh_T = k[b, h].to(torch.float16).transpose(-2, -1).contiguous()
+                                        vh = v[b, h].to(torch.float16).contiguous()
                                         
                                         if attn_mask is not None:
                                             if attn_mask.ndim == 4:
                                                 b_idx = b if attn_mask.size(0) > 1 else 0
                                                 h_idx = h if attn_mask.size(1) > 1 else 0
-                                                mask_bh = attn_mask[b_idx, h_idx].to(torch.float32)
+                                                mask_bh = attn_mask[b_idx, h_idx].to(torch.float16).contiguous()
                                             elif attn_mask.ndim == 3:
                                                 b_idx = b if attn_mask.size(0) > 1 else 0
-                                                mask_bh = attn_mask[b_idx].to(torch.float32)
+                                                mask_bh = attn_mask[b_idx].to(torch.float16).contiguous()
                                             else:
-                                                mask_bh = attn_mask.to(torch.float32)
+                                                mask_bh = attn_mask.to(torch.float16).contiguous()
                                                 
-                                        out_bh = torch.empty(q_len, head_dim, dtype=torch.float32, device=q.device)
+                                        out_bh = torch.empty(q_len, head_dim, dtype=torch.float16, device=q.device)
                                         
                                         for i in range(0, q_len, CHUNK_SIZE):
                                             end_i = min(i + CHUNK_SIZE, q_len)
-                                            qh_chunk = qh[i:end_i]
+                                            qh_chunk = qh[i:end_i].contiguous()
                                             
                                             attn_chunk = torch.matmul(qh_chunk, kh_T) * scale_factor
                                             
@@ -138,6 +139,8 @@ class LocateAnythingDetector:
                                             if attn_mask is not None:
                                                 attn_chunk = attn_chunk + mask_bh[i:end_i]
                                                 
+                                            # Clamp siêu quan trọng: chống tràn số float16 gây ra NaN/Inf
+                                            attn_chunk = torch.clamp(attn_chunk, min=-65000.0, max=65000.0)
                                             attn_chunk = torch.nn.functional.softmax(attn_chunk, dim=-1)
                                             
                                             if dropout_p > 0.0:
