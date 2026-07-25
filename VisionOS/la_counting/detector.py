@@ -77,31 +77,81 @@ class LocateAnythingDetector:
                 torch.backends.cuda.enable_mem_efficient_sdp(True)
                 torch.backends.cuda.enable_math_sdp(True)
 
-                # Monkey-patch Qwen2MLP để chống tràn số float16
+                # Monkey-patch Qwen2DecoderLayer để tính toán residual stream bằng float32
                 try:
                     import transformers.models.qwen2.modeling_qwen2 as qwen2_model
-                    if not getattr(qwen2_model.Qwen2MLP, "_la_patched_mlp", False):
+                    if not getattr(qwen2_model.Qwen2DecoderLayer, "_la_patched_layer", False):
+                        _orig_layer_forward = qwen2_model.Qwen2DecoderLayer.forward
+                        def _safe_layer_forward(
+                            self_layer,
+                            hidden_states,
+                            attention_mask=None,
+                            position_ids=None,
+                            past_key_value=None,
+                            output_attentions=False,
+                            use_cache=False,
+                            cache_position=None,
+                            **kwargs
+                        ):
+                            # Ép residual stream lên float32
+                            residual = hidden_states.to(torch.float32)
+                            
+                            # LayerNorm nội bộ sẽ downcast output về float16 (theo dtype của weight)
+                            normed = self_layer.input_layernorm(hidden_states)
+                            
+                            # Tính Attention ở float16
+                            attn_outputs = self_layer.self_attn(
+                                hidden_states=normed,
+                                attention_mask=attention_mask,
+                                position_ids=position_ids,
+                                past_key_value=past_key_value,
+                                output_attentions=output_attentions,
+                                use_cache=use_cache,
+                                cache_position=cache_position,
+                                **kwargs
+                            )
+                            attn_out = attn_outputs[0]
+                            
+                            # Cộng residual ở float32
+                            hidden_states = residual + attn_out.to(torch.float32)
+                            
+                            # Fully Connected
+                            residual = hidden_states
+                            normed = self_layer.post_attention_layernorm(hidden_states)
+                            
+                            # Tính MLP ở float16, nhưng ép nội bộ x_f32 để tránh tràn SiLU (như đã phân tích)
+                            mlp_out = self_layer.mlp(normed)
+                            
+                            # Cộng residual ở float32
+                            hidden_states = residual + mlp_out.to(torch.float32)
+                            
+                            outputs = (hidden_states,)
+                            if output_attentions:
+                                outputs += (attn_outputs[1],)
+                            if use_cache:
+                                outputs += (attn_outputs[2] if len(attn_outputs) > 2 else None,)
+                            return outputs
+                        
+                        qwen2_model.Qwen2DecoderLayer.forward = _safe_layer_forward
+                        qwen2_model.Qwen2DecoderLayer._la_patched_layer = True
+                        
+                        # Giữ lại patch MLP chống tràn số cục bộ
                         _orig_mlp_forward = qwen2_model.Qwen2MLP.forward
                         def _safe_mlp_forward(self_mlp, x):
-                            # Upcast lên float32 để tính toán, chống tràn số
                             x_f32 = x.to(torch.float32)
                             gate_w = self_mlp.gate_proj.weight.to(torch.float32)
                             up_w = self_mlp.up_proj.weight.to(torch.float32)
                             down_w = self_mlp.down_proj.weight.to(torch.float32)
-                            
                             gate = torch.nn.functional.linear(x_f32, gate_w)
                             up = torch.nn.functional.linear(x_f32, up_w)
-                            
                             inter = self_mlp.act_fn(gate) * up
                             out = torch.nn.functional.linear(inter, down_w)
-                            
                             out = torch.clamp(out, min=-65000.0, max=65000.0)
                             return out.to(x.dtype)
-                        
                         qwen2_model.Qwen2MLP.forward = _safe_mlp_forward
-                        qwen2_model.Qwen2MLP._la_patched_mlp = True
+
                 except Exception as e:
-                    print(f"⚠️  Lỗi khi patch Qwen2MLP: {e}")
+                    print(f"⚠️  Lỗi khi patch Qwen2: {e}")
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
