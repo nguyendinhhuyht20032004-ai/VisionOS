@@ -95,6 +95,7 @@ class LocateAnythingDetector:
                             inter = self_mlp.act_fn(gate) * up
                             out = torch.nn.functional.linear(inter, down_w)
                             
+                            out = torch.clamp(out, min=-65000.0, max=65000.0)
                             return out.to(x.dtype)
                         
                         qwen2_model.Qwen2MLP.forward = _safe_mlp_forward
