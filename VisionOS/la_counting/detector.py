@@ -98,57 +98,56 @@ class LocateAnythingDetector:
                                 is_causal = args[5] if len(args) >= 6 else kwargs.get("is_causal", False)
                                 scale = args[6] if len(args) >= 7 else kwargs.get("scale", None)
                                 
-                                scale_factor = scale if scale is not None else (1.0 / math.sqrt(head_dim))
-                                out = torch.empty(bsz, num_heads, q_len, head_dim, dtype=torch.bfloat16, device=q.device)
+                                gpu_device = q.device
                                 
-                                causal_mask = None
+                                causal_mask_cpu = None
                                 if is_causal:
-                                    causal_mask = torch.ones(q_len, k_len, dtype=torch.bool, device=q.device).tril(diagonal=0)
+                                    causal_mask_cpu = torch.ones(q_len, k_len, dtype=torch.bool).tril(diagonal=0)
                                     
-                                CHUNK_SIZE = 1024
+                                CHUNK_SIZE = 512
+                                out = torch.empty(bsz, num_heads, q_len, head_dim, dtype=torch.bfloat16, device=gpu_device)
                                 
                                 for b in range(bsz):
                                     for h in range(num_heads):
-                                        # Dùng float16 để kích hoạt Tensor Cores (cublasHgemm), né lỗi cublasSgemm của float32
-                                        qh = q[b, h].to(torch.float16).contiguous()
-                                        kh_T = k[b, h].to(torch.float16).transpose(-2, -1).contiguous()
-                                        vh = v[b, h].to(torch.float16).contiguous()
+                                        # Chuyển sang CPU float32 - hoàn toàn bypass cuBLAS, dùng MKL/OpenBLAS
+                                        qh = q[b, h].to(dtype=torch.float32, device="cpu")
+                                        kh_T = k[b, h].to(dtype=torch.float32, device="cpu").transpose(-2, -1).contiguous()
+                                        vh = v[b, h].to(dtype=torch.float32, device="cpu")
                                         
+                                        mask_bh_cpu = None
                                         if attn_mask is not None:
                                             if attn_mask.ndim == 4:
                                                 b_idx = b if attn_mask.size(0) > 1 else 0
                                                 h_idx = h if attn_mask.size(1) > 1 else 0
-                                                mask_bh = attn_mask[b_idx, h_idx].to(torch.float16).contiguous()
+                                                mask_bh_cpu = attn_mask[b_idx, h_idx].to(dtype=torch.float32, device="cpu")
                                             elif attn_mask.ndim == 3:
                                                 b_idx = b if attn_mask.size(0) > 1 else 0
-                                                mask_bh = attn_mask[b_idx].to(torch.float16).contiguous()
+                                                mask_bh_cpu = attn_mask[b_idx].to(dtype=torch.float32, device="cpu")
                                             else:
-                                                mask_bh = attn_mask.to(torch.float16).contiguous()
+                                                mask_bh_cpu = attn_mask.to(dtype=torch.float32, device="cpu")
                                                 
-                                        out_bh = torch.empty(q_len, head_dim, dtype=torch.float16, device=q.device)
+                                        out_bh_cpu = torch.empty(q_len, head_dim, dtype=torch.float32)
                                         
                                         for i in range(0, q_len, CHUNK_SIZE):
                                             end_i = min(i + CHUNK_SIZE, q_len)
-                                            qh_chunk = qh[i:end_i].contiguous()
+                                            qh_chunk = qh[i:end_i]
                                             
                                             attn_chunk = torch.matmul(qh_chunk, kh_T) * scale_factor
                                             
-                                            if causal_mask is not None:
-                                                attn_chunk = attn_chunk.masked_fill(~causal_mask[i:end_i], float("-inf"))
+                                            if causal_mask_cpu is not None:
+                                                attn_chunk = attn_chunk.masked_fill(~causal_mask_cpu[i:end_i], float("-inf"))
                                                 
-                                            if attn_mask is not None:
-                                                attn_chunk = attn_chunk + mask_bh[i:end_i]
+                                            if mask_bh_cpu is not None:
+                                                attn_chunk = attn_chunk + mask_bh_cpu[i:end_i]
                                                 
-                                            # Clamp siêu quan trọng: chống tràn số float16 gây ra NaN/Inf
-                                            attn_chunk = torch.clamp(attn_chunk, min=-65000.0, max=65000.0)
                                             attn_chunk = torch.nn.functional.softmax(attn_chunk, dim=-1)
                                             
                                             if dropout_p > 0.0:
                                                 attn_chunk = torch.nn.functional.dropout(attn_chunk, p=dropout_p)
                                                 
-                                            out_bh[i:end_i] = torch.matmul(attn_chunk, vh)
+                                            out_bh_cpu[i:end_i] = torch.matmul(attn_chunk, vh)
                                             
-                                        out[b, h] = out_bh.to(torch.bfloat16)
+                                        out[b, h] = out_bh_cpu.to(dtype=torch.bfloat16, device=gpu_device)
                                 
                                 if original_ndim == 3:
                                     out = out.squeeze(1)
