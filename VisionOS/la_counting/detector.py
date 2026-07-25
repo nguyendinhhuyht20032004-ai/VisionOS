@@ -99,7 +99,7 @@ class LocateAnythingDetector:
                                 scale = args[6] if len(args) >= 7 else kwargs.get("scale", None)
                                 
                                 gpu_device = q.device
-                                
+                                scale_factor = scale if scale is not None else (1.0 / math.sqrt(head_dim))
                                 causal_mask_cpu = None
                                 if is_causal:
                                     causal_mask_cpu = torch.ones(q_len, k_len, dtype=torch.bool).tril(diagonal=0)
