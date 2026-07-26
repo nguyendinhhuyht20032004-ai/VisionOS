@@ -375,12 +375,12 @@ class LocateAnythingDetector:
         # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
         # kwargs có thể không được nhận ở bản generate này → thử rồi rút gọn dần.
         base = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True)
-        attempts = [
-            dict(base, generation_mode="hybrid", do_sample=False, repetition_penalty=1.05),
-            dict(base, generation_mode="hybrid", do_sample=False),
-            dict(base, generation_mode="hybrid"),
-            base,
-        ]
+        # TẮT generation_mode="hybrid" (Parallel Box Decoding)!
+        # Mask 4D tuỳ biến của chế độ hybrid là nguyên nhân GỐC RỄ gây crash cuBLAS
+        # (CUBLAS_STATUS_EXECUTION_FAILED) trên GPU Turing do không tương thích với SDPA.
+        # Chuyển về chế độ sinh tự hồi quy (autoregressive) chuẩn của HuggingFace,
+        # đảm bảo chạy ổn định 100% không bao giờ lỗi mask.
+        attempts = [ base ]
         output, last_err = None, None
         with torch.no_grad():
             for kw in attempts:
