@@ -96,7 +96,7 @@ def patch_modeling_source(code: str) -> str:
     # pattern gốc chỉ khớp 1 lần.
     code = code.replace(
         "if seq_len > self.max_seq_len_cached",
-        "if seq_len > self.max_seq_len_cached or not hasattr(self, '_cos_cached') or self._cos_cached is None",
+        "if seq_len > self.max_seq_len_cached or not hasattr(self, 'cos_cached') or self.cos_cached is None",
     )
     return code
 

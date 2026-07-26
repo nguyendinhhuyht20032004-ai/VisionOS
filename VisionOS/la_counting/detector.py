@@ -157,14 +157,22 @@ class LocateAnythingDetector:
         # different from cuda:0". Model 3B float16 (~6GB) thừa sức nằm gọn 1 T4 (16GB).
         # Nạp phẳng (không device_map, không hook accelerate) rồi .to() cho tương thích
         # tối đa với generate() quản lý thiết bị thủ công của model.
+        # THỰC TẾ (đối chiếu trực tiếp modeling_qwen2.py trên HF): bundled model có
+        # 4 lựa chọn attn_implementation — eager / flash_attention_2 / sdpa / magi
+        # (mặc định gốc của model là "magi", cần gói magi_attention không có sẵn
+        # trên Kaggle). "sdpa" là lựa chọn AN TOÀN nhất khi flash-attn không có
+        # (T4/Turing cũng không được flash-attn 2 hỗ trợ tốt). Cho phép ép tay qua
+        # LA_ATTN=eager để CHẨN ĐOÁN: "eager" có raise ValueError rõ ràng khi kích
+        # thước attention_mask sai lệch (thay vì lỗi CUDA device-side assert mù mờ
+        # nếu mask 4D tuỳ biến của model — dùng cho chế độ giải mã song song theo
+        # khối — không khớp shape SDPA mong đợi).
+        attn_impl = os.environ.get("LA_ATTN", "sdpa")
         self.model = AutoModel.from_pretrained(
             self.model_dir,
             config=config,
             trust_remote_code=True,
             torch_dtype=self.dtype,
-            # Bundled model CHỈ implement SDPA attention (không có eager/flash).
-            # Crash CUBLAS trên T4 được fix bằng dtype=float32 (ở trên).
-            attn_implementation="sdpa",
+            attn_implementation=attn_impl,
         )
         if torch.cuda.is_available() and not self._cpu_debug:
             self.model = self.model.to("cuda:0")
