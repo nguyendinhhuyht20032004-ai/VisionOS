@@ -183,6 +183,22 @@ class LocateAnythingDetector:
         # VÁ LỖI TRÀN SỐ DÀNH RIÊNG CHO MÔ HÌNH BUNDLED SAU KHI ĐÃ TẢI
         # =========================================================================
         if torch.cuda.is_available() and not self._cpu_debug and cc[0] < 8:
+            patched_linear = 0
+            for module in self.model.modules():
+                if isinstance(module, torch.nn.Linear):
+                    if not getattr(module, "_la_patched_linear", False):
+                        orig_forward = module.forward
+                        def safe_linear_forward(x, orig=orig_forward):
+                            if x.dtype == torch.float16:
+                                x = torch.nan_to_num(x, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                            out = orig(x)
+                            if out.dtype == torch.float16:
+                                out = torch.nan_to_num(out, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                            return out
+                        module.forward = safe_linear_forward
+                        module._la_patched_linear = True
+                        patched_linear += 1
+            print(f"🔧 Patched {patched_linear} Linear layers with nan_to_num firewall")
             qwen2_layer_cls = None
             qwen2_mlp_cls = None
             for module in self.model.modules():
