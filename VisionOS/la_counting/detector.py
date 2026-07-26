@@ -178,9 +178,22 @@ class LocateAnythingDetector:
             self.model = self.model.to("cuda:0")
             
         # =========================================================================
-        # VÁ LỖI TRÀN SỐ DÀNH RIÊNG CHO MÔ HÌNH BUNDLED SAU KHI ĐÃ TẢI
-        # =========================================================================
         if torch.cuda.is_available() and not self._cpu_debug and cc[0] < 8:
+            if not getattr(torch.nn.functional, "_la_patched_sdpa", False):
+                orig_sdpa = torch.nn.functional.scaled_dot_product_attention
+                def safe_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, **kwargs):
+                    if query.dtype == torch.float16:
+                        query = torch.nan_to_num(query, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                        key = torch.nan_to_num(key, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                        value = torch.nan_to_num(value, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    out = orig_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, **kwargs)
+                    if out.dtype == torch.float16:
+                        out = torch.nan_to_num(out, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    return out
+                torch.nn.functional.scaled_dot_product_attention = safe_sdpa
+                torch.nn.functional._la_patched_sdpa = True
+                print("🔧 Patched Global SDPA with nan_to_num firewall (Protects against RoPE float16 overflow!)")
+
             patched_linear = 0
             for module in self.model.modules():
                 if isinstance(module, torch.nn.Linear):
