@@ -242,6 +242,18 @@ class LocateAnythingDetector:
                 qwen2_mlp_cls.forward = _safe_mlp_forward
                 qwen2_mlp_cls._la_patched_mlp = True
                 print("🔧 Patched bundled Qwen2MLP (float32 math + clamp)")
+                
+            # Vá lm_head để nhận kết quả float32 từ residual stream cuối cùng
+            if hasattr(self.model, "language_model") and hasattr(self.model.language_model, "lm_head"):
+                lm_head = self.model.language_model.lm_head
+                if not getattr(lm_head, "_la_patched", False):
+                    _orig_lm_forward = lm_head.forward
+                    # Dùng default argument để tránh late binding closure issues
+                    def _safe_lm_forward(x, orig=_orig_lm_forward, target_dtype=lm_head.weight.dtype):
+                        return orig(x.to(target_dtype))
+                    lm_head.forward = _safe_lm_forward
+                    lm_head._la_patched = True
+                    print("🔧 Patched lm_head (downcast to float16)")
         # =========================================================================
 
         self.model.eval()
