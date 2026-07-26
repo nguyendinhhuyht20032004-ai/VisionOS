@@ -72,9 +72,11 @@ class LocateAnythingDetector:
             if cc[0] < 8:  # Turing (T4), Volta, Pascal...
                 print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Kích hoạt Nuclear Fix: float16 model + float32 Qwen2MLP.")
                 
-                # Bật Flash/MemEfficient SDPA thoải mái vì float16 được hỗ trợ native!
-                torch.backends.cuda.enable_flash_sdp(True)
-                torch.backends.cuda.enable_mem_efficient_sdp(True)
+                # TẮT Flash/MemEfficient SDPA trên Turing! Các kernel SDPA tối ưu này
+                # bị lỗi "device-side assert" (out-of-bounds) khi nhận attention_mask 4D
+                # tuỳ biến của Qwen2 trong chế độ hybrid parallel decoding. Chỉ dùng Math SDPA!
+                torch.backends.cuda.enable_flash_sdp(False)
+                torch.backends.cuda.enable_mem_efficient_sdp(False)
                 torch.backends.cuda.enable_math_sdp(True)
 
                 # Monkey-patch Qwen2DecoderLayer và Qwen2MLP của mô hình BUNDLED.
