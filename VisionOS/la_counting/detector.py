@@ -60,59 +60,33 @@ class LocateAnythingDetector:
         else:
             self.dtype = torch.bfloat16  # mặc định: bf16 (dtype gốc của model)
 
-        # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
-        # T4 không có tensor-core bf16 gốc → cublasSgemmStridedBatched fail.
-        # T4 (Turing, cc 7.5): SDPA flash/mem_efficient backend CRASH với bf16 vì
-        # T4 không có tensor-core bf16 gốc → cublasSgemmStridedBatched fail.
-        # GỌI F.scaled_dot_product_attention dù cast sang float32 vẫn bị crash
-        # (do PyTorch dispatch ngầm). Giải pháp triệt để: VIẾT LẠI attention thủ công
-        # (eager fallback) bằng torch.matmul (float32) khi gọi SDPA.
+        # GIẢI PHÁP TỐI THƯỢNG CHO KAGGLE T4 (Turing cc 7.5):
+        # 1. bfloat16 trên T4 dùng software emulation -> Gây random "device-side assert" ở Conv2d, Linear, RoPE.
+        # 2. float32 toàn bộ model -> Gây OOM (Out Of Memory) vì 3B model = 12GB weights.
+        # 3. float16 toàn bộ model -> Chạy cực mượt bằng Tensor Cores, NHƯNG Qwen2 MLP bị tràn số (overflow > 65504) gây CUBLAS_INTERNAL_ERROR.
+        # => CÁCH GIẢI QUYẾT: Load toàn bộ model bằng float16, nhưng monkey-patch riêng Qwen2MLP tính toán bằng float32!
+        self.dtype = torch.float16
+
         if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
             if cc[0] < 8:  # Turing (T4), Volta, Pascal...
-                torch.backends.cuda.enable_flash_sdp(False)
-                torch.backends.cuda.enable_mem_efficient_sdp(False)
-                torch.backends.cuda.enable_math_sdp(True)
+                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Kích hoạt Nuclear Fix: float16 model + float32 Qwen2MLP.")
                 
-                if self.dtype == torch.bfloat16:
-                    import torch.nn.functional as F
-                    if not getattr(F, "_la_patched_sdpa", False):
-                        _orig_sdpa = F.scaled_dot_product_attention
-                        def _eager_sdpa(*args, **kwargs):
-                            if len(args) >= 3 and torch.is_tensor(args[0]) and args[0].dtype == torch.bfloat16:
-                                import math
-                                q = args[0].to(torch.float32).contiguous()
-                                k = args[1].to(torch.float32).contiguous()
-                                v = args[2].to(torch.float32).contiguous()
-                                
-                                attn_mask = args[3] if len(args) >= 4 else kwargs.get("attn_mask", None)
-                                dropout_p = args[4] if len(args) >= 5 else kwargs.get("dropout_p", 0.0)
-                                is_causal = args[5] if len(args) >= 6 else kwargs.get("is_causal", False)
-                                scale = args[6] if len(args) >= 7 else kwargs.get("scale", None)
-                                
-                                scale_factor = scale if scale is not None else (1.0 / math.sqrt(q.size(-1)))
-                                attn = torch.matmul(q, k.transpose(-2, -1)) * scale_factor
-                                
-                                if is_causal:
-                                    L, S = q.size(-2), k.size(-2)
-                                    causal_mask = torch.ones(L, S, dtype=torch.bool, device=q.device).tril(diagonal=0)
-                                    attn = attn.masked_fill(~causal_mask, float("-inf"))
-                                
-                                if attn_mask is not None:
-                                    if attn_mask.dtype == torch.bfloat16:
-                                        attn_mask = attn_mask.to(torch.float32)
-                                    attn = attn + attn_mask
-                                
-                                attn = torch.nn.functional.softmax(attn, dim=-1)
-                                if dropout_p > 0.0:
-                                    attn = torch.nn.functional.dropout(attn, p=dropout_p)
-                                
-                                return torch.matmul(attn, v).to(torch.bfloat16)
-                            return _orig_sdpa(*args, **kwargs)
-                        F.scaled_dot_product_attention = _eager_sdpa
-                        F._la_patched_sdpa = True
-                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Monkey-patch SDPA bằng "
-                      f"Eager Fallback (fp32) để né hoàn toàn CUBLAS crash.")
+                # Bật Flash/MemEfficient SDPA thoải mái vì float16 được hỗ trợ native!
+                torch.backends.cuda.enable_flash_sdp(True)
+                torch.backends.cuda.enable_mem_efficient_sdp(True)
+                torch.backends.cuda.enable_math_sdp(True)
+
+                # Monkey-patch Qwen2DecoderLayer và Qwen2MLP của mô hình BUNDLED.
+                # Do trust_remote_code=True, mô hình dùng file modeling_qwen2.py riêng biệt,
+                # không dùng transformers.models.qwen2 chuẩn. Ta phải vá trực tiếp class của nó.
+                
+                qwen2_layer_cls = None
+                qwen2_mlp_cls = None
+                
+                # Hàm load() chưa tạo self.model, nên ta phải vá sau khi gọi AutoModel.from_pretrained.
+                # NHƯNG wait, đoạn code này chạy TRƯỚC AutoModel.from_pretrained!
+                # Cần lùi logic patch này XUỐNG SAU KHI TẠO self.model!
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
@@ -194,6 +168,94 @@ class LocateAnythingDetector:
         )
         if torch.cuda.is_available() and not self._cpu_debug:
             self.model = self.model.to("cuda:0")
+            
+        # =========================================================================
+        # VÁ LỖI TRÀN SỐ DÀNH RIÊNG CHO MÔ HÌNH BUNDLED SAU KHI ĐÃ TẢI
+        # =========================================================================
+        if torch.cuda.is_available() and not self._cpu_debug and cc[0] < 8:
+            qwen2_layer_cls = None
+            qwen2_mlp_cls = None
+            for module in self.model.modules():
+                if module.__class__.__name__ == "Qwen2DecoderLayer":
+                    qwen2_layer_cls = module.__class__
+                elif module.__class__.__name__ == "Qwen2MLP":
+                    qwen2_mlp_cls = module.__class__
+                if qwen2_layer_cls and qwen2_mlp_cls:
+                    break
+                    
+            if qwen2_layer_cls and not getattr(qwen2_layer_cls, "_la_patched_layer", False):
+                def _safe_layer_forward(
+                    self_layer,
+                    hidden_states,
+                    attention_mask=None,
+                    position_ids=None,
+                    past_key_value=None,
+                    output_attentions=False,
+                    use_cache=False,
+                    **kwargs
+                ):
+                    residual = hidden_states.to(torch.float32)
+                    normed = self_layer.input_layernorm(hidden_states).to(torch.float16)
+                    
+                    # Do not pass cache_position explicitly, let kwargs handle it if it exists.
+                    attn_outputs = self_layer.self_attn(
+                        hidden_states=normed,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        past_key_value=past_key_value,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                        **kwargs
+                    )
+                    attn_out = attn_outputs[0]
+                    hidden_states = residual + attn_out.to(torch.float32)
+                    
+                    residual = hidden_states
+                    normed = self_layer.post_attention_layernorm(hidden_states).to(torch.float16)
+                    mlp_out = self_layer.mlp(normed)
+                    hidden_states = residual + mlp_out.to(torch.float32)
+                    
+                    outputs = (hidden_states,)
+                    if output_attentions:
+                        outputs += (attn_outputs[1],)
+                    if use_cache:
+                        outputs += (attn_outputs[2] if len(attn_outputs) > 2 else None,)
+                    return outputs
+                
+                qwen2_layer_cls.forward = _safe_layer_forward
+                qwen2_layer_cls._la_patched_layer = True
+                print("🔧 Patched bundled Qwen2DecoderLayer (float32 residual)")
+
+            if qwen2_mlp_cls and not getattr(qwen2_mlp_cls, "_la_patched_mlp", False):
+                def _safe_mlp_forward(self_mlp, x):
+                    x_f32 = x.to(torch.float32)
+                    gate_w = self_mlp.gate_proj.weight.to(torch.float32)
+                    up_w = self_mlp.up_proj.weight.to(torch.float32)
+                    down_w = self_mlp.down_proj.weight.to(torch.float32)
+                    gate = torch.nn.functional.linear(x_f32, gate_w)
+                    up = torch.nn.functional.linear(x_f32, up_w)
+                    inter = self_mlp.act_fn(gate) * up
+                    out = torch.nn.functional.linear(inter, down_w)
+                    out = torch.clamp(out, min=-65000.0, max=65000.0)
+                    return out.to(x.dtype)
+                
+                qwen2_mlp_cls.forward = _safe_mlp_forward
+                qwen2_mlp_cls._la_patched_mlp = True
+                print("🔧 Patched bundled Qwen2MLP (float32 math + clamp)")
+                
+            # Vá lm_head để nhận kết quả float32 từ residual stream cuối cùng
+            if hasattr(self.model, "language_model") and hasattr(self.model.language_model, "lm_head"):
+                lm_head = self.model.language_model.lm_head
+                if not getattr(lm_head, "_la_patched", False):
+                    _orig_lm_forward = lm_head.forward
+                    # Dùng default argument để tránh late binding closure issues
+                    def _safe_lm_forward(x, orig=_orig_lm_forward, target_dtype=lm_head.weight.dtype):
+                        return orig(x.to(target_dtype))
+                    lm_head.forward = _safe_lm_forward
+                    lm_head._la_patched = True
+                    print("🔧 Patched lm_head (downcast to float16)")
+        # =========================================================================
+
         self.model.eval()
         self._loaded = True
         print(f"✅ Loaded in {time.time() - t0:.1f}s (device={self.model.device})")
