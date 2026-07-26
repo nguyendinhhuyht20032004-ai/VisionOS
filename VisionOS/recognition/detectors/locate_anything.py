@@ -98,6 +98,13 @@ def patch_modeling_source(code: str) -> str:
         "if seq_len > self.max_seq_len_cached",
         "if seq_len > self.max_seq_len_cached or not hasattr(self, 'cos_cached') or self.cos_cached is None",
     )
+    # Ngăn chặn slice RoPE cache theo seq_len. Trong hybrid decoding của Qwen2, 
+    # position_ids có thể lớn hơn seq_len (kv_seq_len). Slice sẽ làm cos[position_ids]
+    # đọc vượt quá mảng, gây hỏng CUDA stream và báo lỗi ở SDPA. Trả về full cache!
+    code = code.replace(
+        "return self.cos_cached[:seq_len].to(dtype=x.dtype), self.sin_cached[:seq_len].to(dtype=x.dtype)",
+        "return self.cos_cached.to(dtype=x.dtype), self.sin_cached.to(dtype=x.dtype)",
+    )
     return code
 
 

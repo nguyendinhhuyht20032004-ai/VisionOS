@@ -119,6 +119,9 @@ def test_rope_cache_guard_uses_real_attribute_name():
     assert "hasattr(self, 'cos_cached')" in out
     assert "self.cos_cached is None" in out
     assert "_cos_cached" not in out
+    # Đảm bảo KHÔNG CÒN việc slice cache theo seq_len
+    assert "self.cos_cached[:seq_len]" not in out
+    assert "return self.cos_cached.to" in out
 
 
 def test_idempotent():
