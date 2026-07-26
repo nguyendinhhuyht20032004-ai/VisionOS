@@ -234,22 +234,7 @@ class LocateAnythingDetector:
                 qwen2_layer_cls._la_patched_layer = True
                 print("🔧 Patched bundled Qwen2DecoderLayer (float32 residual)")
 
-            if qwen2_mlp_cls and not getattr(qwen2_mlp_cls, "_la_patched_mlp", False):
-                def _safe_mlp_forward(self_mlp, x):
-                    x_f32 = x.to(torch.float32)
-                    gate_w = self_mlp.gate_proj.weight.to(torch.float32)
-                    up_w = self_mlp.up_proj.weight.to(torch.float32)
-                    down_w = self_mlp.down_proj.weight.to(torch.float32)
-                    gate = torch.nn.functional.linear(x_f32, gate_w)
-                    up = torch.nn.functional.linear(x_f32, up_w)
-                    inter = self_mlp.act_fn(gate) * up
-                    out = torch.nn.functional.linear(inter, down_w)
-                    out = torch.clamp(out, min=-65000.0, max=65000.0)
-                    return out.to(x.dtype)
-                
-                qwen2_mlp_cls.forward = _safe_mlp_forward
-                qwen2_mlp_cls._la_patched_mlp = True
-                print("🔧 Patched bundled Qwen2MLP (float32 math + clamp)")
+
                 
             # Vá lm_head để nhận kết quả float32 từ residual stream cuối cùng
             if hasattr(self.model, "language_model") and hasattr(self.model.language_model, "lm_head"):
