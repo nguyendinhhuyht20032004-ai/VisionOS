@@ -165,13 +165,8 @@ class LocateAnythingDetector:
         # trên Kaggle). "sdpa" là lựa chọn AN TOÀN nhất khi flash-attn không có
         # (T4/Turing cũng không được flash-attn 2 hỗ trợ tốt). Cho phép ép tay qua
         # LA_ATTN=eager để CHẨN ĐOÁN: "eager" có raise ValueError rõ ràng khi kích
-        # thước attention_mask sai lệch (thay vì lỗi CUDA device-side assert mù mờ
-        # nếu mask 4D tuỳ biến của model — dùng cho chế độ giải mã song song theo
-        # khối — không khớp shape SDPA mong đợi).
         # model tự tính position_ids phù hợp với RoPE cache của nó.
-        cc = torch.cuda.get_device_capability() if torch.cuda.is_available() else (8, 0)
-        default_attn = "eager" if cc[0] < 8 else "sdpa"
-        attn_impl = os.environ.get("LA_ATTN", default_attn)
+        attn_impl = os.environ.get("LA_ATTN", "sdpa")
         self.model = AutoModel.from_pretrained(
             self.model_dir,
             config=config,
@@ -378,12 +373,7 @@ class LocateAnythingDetector:
         # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
         # kwargs có thể không được nhận ở bản generate này → thử rồi rút gọn dần.
         base = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True)
-        attempts = [
-            dict(base, generation_mode="hybrid", do_sample=False, repetition_penalty=1.05),
-            dict(base, generation_mode="hybrid", do_sample=False),
-            dict(base, generation_mode="hybrid"),
-            base,
-        ]
+        attempts = [ base ]
         output, last_err = None, None
         with torch.no_grad():
             for kw in attempts:
