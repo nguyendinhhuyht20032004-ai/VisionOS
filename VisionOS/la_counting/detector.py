@@ -202,8 +202,11 @@ class LocateAnythingDetector:
                     use_cache=False,
                     **kwargs
                 ):
+                    hidden_states = torch.nan_to_num(hidden_states, nan=0.0, posinf=65000.0, neginf=-65000.0)
                     residual = hidden_states.to(torch.float32)
+                    
                     normed = self_layer.input_layernorm(hidden_states).to(torch.float16)
+                    normed = torch.nan_to_num(normed, nan=0.0, posinf=65000.0, neginf=-65000.0)
                     
                     # Do not pass cache_position explicitly, let kwargs handle it if it exists.
                     attn_outputs = self_layer.self_attn(
@@ -216,11 +219,15 @@ class LocateAnythingDetector:
                         **kwargs
                     )
                     attn_out = attn_outputs[0]
+                    attn_out = torch.nan_to_num(attn_out, nan=0.0, posinf=65000.0, neginf=-65000.0)
                     hidden_states = residual + attn_out.to(torch.float32)
                     
                     residual = hidden_states
                     normed = self_layer.post_attention_layernorm(hidden_states).to(torch.float16)
+                    normed = torch.nan_to_num(normed, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    
                     mlp_out = self_layer.mlp(normed)
+                    mlp_out = torch.nan_to_num(mlp_out, nan=0.0, posinf=65000.0, neginf=-65000.0)
                     hidden_states = residual + mlp_out.to(torch.float32)
                     
                     outputs = (hidden_states,)
@@ -232,7 +239,24 @@ class LocateAnythingDetector:
                 
                 qwen2_layer_cls.forward = _safe_layer_forward
                 qwen2_layer_cls._la_patched_layer = True
-                print("🔧 Patched bundled Qwen2DecoderLayer (float32 residual)")
+                print("🔧 Patched bundled Qwen2DecoderLayer (float32 residual + nan_to_num)")
+
+            if qwen2_mlp_cls and not getattr(qwen2_mlp_cls, "_la_patched_mlp", False):
+                def _safe_mlp_forward(self_mlp, x):
+                    x = torch.nan_to_num(x, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    gate = self_mlp.gate_proj(x)
+                    gate = torch.nan_to_num(gate, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    up = self_mlp.up_proj(x)
+                    up = torch.nan_to_num(up, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    inter = self_mlp.act_fn(gate) * up
+                    inter = torch.nan_to_num(inter, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    out = self_mlp.down_proj(inter)
+                    out = torch.nan_to_num(out, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    return out
+                
+                qwen2_mlp_cls.forward = _safe_mlp_forward
+                qwen2_mlp_cls._la_patched_mlp = True
+                print("🔧 Patched bundled Qwen2MLP (float16 math + nan_to_num)")
 
 
                 
