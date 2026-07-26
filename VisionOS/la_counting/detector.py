@@ -168,7 +168,10 @@ class LocateAnythingDetector:
         # thước attention_mask sai lệch (thay vì lỗi CUDA device-side assert mù mờ
         # nếu mask 4D tuỳ biến của model — dùng cho chế độ giải mã song song theo
         # khối — không khớp shape SDPA mong đợi).
-        attn_impl = os.environ.get("LA_ATTN", "sdpa")
+        # model tự tính position_ids phù hợp với RoPE cache của nó.
+        cc = torch.cuda.get_device_capability() if torch.cuda.is_available() else (8, 0)
+        default_attn = "eager" if cc[0] < 8 else "sdpa"
+        attn_impl = os.environ.get("LA_ATTN", default_attn)
         self.model = AutoModel.from_pretrained(
             self.model_dir,
             config=config,
@@ -365,22 +368,22 @@ class LocateAnythingDetector:
             inputs = proc(text=[text], images=[pil_image], return_tensors="pt")
         inputs = {k: self._prep_input(v) for k, v in inputs.items()}
 
-        # KHÔNG truyền position_ids vào generate(): processor tạo position_ids dựa
-        # trên toàn bộ input (ảnh + text) nhưng bundled model tính RoPE cos/sin cache
-        # nội bộ với max_position_embeddings NHỎ hơn → index out of bounds. Bỏ để
-        # model tự tính position_ids phù hợp với RoPE cache của nó.
-        inputs.pop("position_ids", None)
-
+        # KHÔNG XÓA position_ids nữa!
+        # Vì lỗi RoPE cache out-of-bounds đã được sửa hoàn toàn (luôn trả về full cache),
+        # ta CẦN truyền position_ids gốc của processor vào. Việc thiếu position_ids
+        # là nguyên nhân khiến mask 4D của model bị sai lệch shape và gây lỗi
+        # CUBLAS_STATUS_EXECUTION_FAILED ở bước SDPA.
+        
         # generate() TÙY BIẾN của model: cần generation_mode="hybrid" (mặc định của
         # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
         # kwargs có thể không được nhận ở bản generate này → thử rồi rút gọn dần.
         base = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True)
-        # TẮT generation_mode="hybrid" (Parallel Box Decoding)!
-        # Mask 4D tuỳ biến của chế độ hybrid là nguyên nhân GỐC RỄ gây crash cuBLAS
-        # (CUBLAS_STATUS_EXECUTION_FAILED) trên GPU Turing do không tương thích với SDPA.
-        # Chuyển về chế độ sinh tự hồi quy (autoregressive) chuẩn của HuggingFace,
-        # đảm bảo chạy ổn định 100% không bao giờ lỗi mask.
-        attempts = [ base ]
+        attempts = [
+            dict(base, generation_mode="hybrid", do_sample=False, repetition_penalty=1.05),
+            dict(base, generation_mode="hybrid", do_sample=False),
+            dict(base, generation_mode="hybrid"),
+            base,
+        ]
         output, last_err = None, None
         with torch.no_grad():
             for kw in attempts:
