@@ -436,8 +436,9 @@ class LocateAnythingDetector:
         # generate() TÙY BIẾN của model: cần generation_mode="hybrid" (mặc định của
         # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
         # kwargs có thể không được nhận ở bản generate này → thử rồi rút gọn dần.
-        base = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True)
-        attempts = [ base ]
+        base_full = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True, generation_mode="hybrid", repetition_penalty=1.2)
+        base_simple = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True)
+        attempts = [ base_full, base_simple ]
         output, last_err = None, None
         with torch.no_grad():
             for kw in attempts:
