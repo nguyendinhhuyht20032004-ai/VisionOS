@@ -255,7 +255,7 @@ class LocateAnythingDetector:
                     attn_outputs = self_layer.self_attn(
                         hidden_states=normed,
                         attention_mask=attention_mask,
-                        position_ids=None,
+                        position_ids=position_ids,
                         past_key_value=past_key_value,
                         output_attentions=output_attentions,
                         use_cache=use_cache,
@@ -332,6 +332,27 @@ class LocateAnythingDetector:
                     lm_head.forward = _safe_lm_forward
                     lm_head._la_patched = True
                     print("🔧 [eager] Chỉ vá lm_head (nan_to_num đầu ra cuối) — không đụng attention/MLP nội bộ.")
+
+        # Patch RotaryEmbedding để không bị index out of bounds khi model xài custom position_ids
+        if hasattr(self.model, "language_model") and hasattr(self.model.language_model, "model"):
+            try:
+                rotary_emb_cls = type(self.model.language_model.model.layers[0].self_attn.rotary_emb)
+                if not getattr(rotary_emb_cls, "_la_patched", False):
+                    _orig_rotary_forward = rotary_emb_cls.forward
+                    def _safe_rotary_forward(self_emb, x, seq_len=None):
+                        if seq_len is not None and seq_len > self_emb.max_seq_len_cached:
+                            self_emb._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+                        # Trả về toàn bộ cache thay vì truncate tới seq_len, vì seq_len có thể nhỏ hơn max(position_ids)
+                        return (
+                            self_emb.cos_cached.to(dtype=x.dtype),
+                            self_emb.sin_cached.to(dtype=x.dtype),
+                        )
+                    rotary_emb_cls.forward = _safe_rotary_forward
+                    rotary_emb_cls._la_patched = True
+                    print("🔧 Patched Qwen2RotaryEmbedding (disabled seq_len truncation)")
+            except Exception as e:
+                print(f"⚠️ Could not patch RotaryEmbedding: {e}")
+
         # =========================================================================
 
         self.model.eval()
@@ -411,12 +432,6 @@ class LocateAnythingDetector:
             inputs = proc(text=[text], images=[pil_image], return_tensors="pt")
         inputs = {k: self._prep_input(v) for k, v in inputs.items()}
 
-        # XÓA position_ids! Processor tạo position_ids bao gồm offset cho image tokens,
-        # dẫn đến chỉ số vượt quá kích thước embedding table / RoPE cache của model.
-        # Hậu quả: CUDA assertion `vectorized_gather_kernel: index out of bounds`.
-        # Khi bỏ position_ids, model tự tính position_ids tuần tự từ 0, luôn nằm
-        # trong phạm vi hợp lệ. Global SDPA Firewall đã xử lý float16 overflow.
-        inputs.pop("position_ids", None)
         
         # generate() TÙY BIẾN của model: cần generation_mode="hybrid" (mặc định của
         # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
