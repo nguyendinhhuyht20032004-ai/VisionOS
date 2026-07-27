@@ -255,7 +255,7 @@ class LocateAnythingDetector:
                     attn_outputs = self_layer.self_attn(
                         hidden_states=normed,
                         attention_mask=attention_mask,
-                        position_ids=position_ids,
+                        position_ids=None,
                         past_key_value=past_key_value,
                         output_attentions=output_attentions,
                         use_cache=use_cache,
