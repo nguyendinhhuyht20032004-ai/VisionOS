@@ -444,8 +444,10 @@ class LocateAnythingDetector:
             for kw in attempts:
                 try:
                     output = self.model.generate(**kw)
+                    print(f"🔧 [DEBUG] generate() succeeded with keys: {list(kw.keys())}")
                     break
-                except TypeError as e:  # kwarg không được hỗ trợ → thử bộ gọn hơn
+                except TypeError as e:  # kwarg không được hỗ trợ → thử rút gọn hơn
+                    print(f"🔧 [DEBUG] TypeError with keys {list(kw.keys())}: {e}")
                     last_err = e
                     continue
                 except RuntimeError as e:
