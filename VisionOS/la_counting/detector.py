@@ -182,17 +182,23 @@ class LocateAnythingDetector:
             if not getattr(torch.nn.functional, "_la_patched_sdpa", False):
                 orig_sdpa = torch.nn.functional.scaled_dot_product_attention
                 def safe_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, **kwargs):
-                    if query.dtype == torch.float16:
-                        query = torch.nan_to_num(query, nan=0.0, posinf=65000.0, neginf=-65000.0)
-                        key = torch.nan_to_num(key, nan=0.0, posinf=65000.0, neginf=-65000.0)
-                        value = torch.nan_to_num(value, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    # Turing (T4) cuBLAS SgemmStridedBatched crash khi xử lý float16
+                    # với attention mask 4D tuỳ biến. Giải pháp: upcast sang float32
+                    # để dùng cuBLAS float32 GEMM (ổn định 100% trên mọi GPU).
+                    orig_dtype = query.dtype
+                    if orig_dtype == torch.float16:
+                        query = query.to(torch.float32)
+                        key = key.to(torch.float32)
+                        value = value.to(torch.float32)
+                        if attn_mask is not None:
+                            attn_mask = attn_mask.to(torch.float32)
                     out = orig_sdpa(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, **kwargs)
-                    if out.dtype == torch.float16:
-                        out = torch.nan_to_num(out, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                    if out.dtype != orig_dtype:
+                        out = out.to(orig_dtype)
                     return out
                 torch.nn.functional.scaled_dot_product_attention = safe_sdpa
                 torch.nn.functional._la_patched_sdpa = True
-                print("🔧 Patched Global SDPA with nan_to_num firewall (Protects against RoPE float16 overflow!)")
+                print("🔧 Patched Global SDPA: float16→float32 upcast on Turing GPU (avoids cuBLAS crash)")
 
             patched_linear = 0
             for module in self.model.modules():
