@@ -23,6 +23,31 @@ import argparse
 import os
 import sys
 
+# ĐẶT TRƯỚC BẤT KỲ IMPORT TORCH NÀO (torch được nạp lazy trong
+# la_counting/detector.py khi gọi .load() — nên đặt env var CUDA ở đây vẫn kịp).
+#
+#   CUDA_LAUNCH_BLOCKING=1
+#       CUDA mặc định chạy BẤT ĐỒNG BỘ: traceback Python trỏ vào lời gọi CUDA
+#       *sau đó* tình cờ là chỗ phát hiện lỗi — KHÔNG PHẢI chỗ lỗi thật xảy ra.
+#       Đây chính xác là lý do "Nuclear Fix" (upcast float32 rồi mới gọi SDPA)
+#       không sửa được gì: traceback trỏ vào cuBLAS SgemmStridedBatched bên
+#       trong safe_sdpa, nhưng đó CÓ THỂ chỉ là nạn nhân của 1 lỗi index/OOB
+#       xảy ra ở kernel TRƯỚC ĐÓ (context CUDA đã hỏng, mọi lệnh cuBLAS sau đó
+#       đều báo lỗi chung chung). Bật cờ này ép CUDA chạy ĐỒNG BỘ từng lệnh →
+#       traceback trỏ ĐÚNG dòng gây lỗi thật, chậm hơn nhưng bắt buộc khi debug.
+#   CUBLAS_WORKSPACE_CONFIG=:4096:8
+#       cuBLAS đôi khi báo CUBLAS_STATUS_EXECUTION_FAILED khi workspace cấp
+#       phát bị lỗi (thường do VRAM gần đầy) thay vì báo OOM rõ ràng — cấu hình
+#       này ép workspace cỡ cố định, tránh 1 lớp lỗi cấp-phát mơ hồ.
+#   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+#       giảm phân mảnh bộ nhớ CUDA khi load model 3B nhiều lần trong 1 tiến
+#       trình (vd auto-pin re-exec).
+# Có thể tắt để chạy nhanh hơn SAU KHI đã hết lỗi: LA_FAST=1.
+if not os.environ.get("LA_FAST"):
+    os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from recognition.base import BoundingBox  # noqa: E402

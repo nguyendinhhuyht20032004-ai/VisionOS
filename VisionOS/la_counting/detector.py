@@ -60,35 +60,35 @@ class LocateAnythingDetector:
         else:
             self.dtype = torch.bfloat16  # mặc định: bf16 (dtype gốc của model)
 
-        # GIẢI PHÁP TỐI THƯỢNG CHO KAGGLE T4 (Turing cc 7.5):
-        # 1. bfloat16 trên T4 dùng software emulation -> Gây random "device-side assert" ở Conv2d, Linear, RoPE.
-        # 2. float32 toàn bộ model -> Gây OOM (Out Of Memory) vì 3B model = 12GB weights.
-        # 3. float16 toàn bộ model -> Chạy cực mượt bằng Tensor Cores, NHƯNG Qwen2 MLP bị tràn số (overflow > 65504) gây CUBLAS_INTERNAL_ERROR.
-        # => CÁCH GIẢI QUYẾT: Load toàn bộ model bằng float16, nhưng monkey-patch riêng Qwen2MLP tính toán bằng float32!
         self.dtype = torch.float16
 
+        # LỊCH SỬ (để không lặp lại đường đã thử):
+        #   v1: bfloat16 toàn model  → device-side assert ngẫu nhiên ở Conv2d/Linear/RoPE.
+        #   v2: float32 toàn model   → OOM (3B×4B ≈ 12GB weight, T4 chỉ ~15GB khả dụng).
+        #   v3: float16 + monkey-patch nan_to_num từng Linear/DecoderLayer/MLP, upcast
+        #       Q/K/V float32 NGAY TRƯỚC KHI GỌI torch SDPA gốc → VẪN crash đúng
+        #       CUBLAS_STATUS_EXECUTION_FAILED tại chính lời gọi SDPA đó. Kết luận:
+        #       đây KHÔNG PHẢI lỗi tràn số float16 (nếu vậy upcast float32 đã hết lỗi).
+        #       Nhiều khả năng hơn: (a) kernel SDPA "hợp nhất" (fused) mà PyTorch chọn
+        #       trên kiến trúc Turing có bug/không tương thích với 1 hình dạng cụ thể
+        #       của attention_mask 4D tuỳ biến trong model này, hoặc (b) 1 lỗi index
+        #       out-of-bounds xảy ra Ở KERNEL TRƯỚC ĐÓ làm hỏng context CUDA, khiến MỌI
+        #       lệnh cuBLAS sau đó (kể cả không liên quan) đều báo lỗi chung chung —
+        #       CUDA vốn chạy bất đồng bộ nên traceback hay trỏ nhầm thủ phạm.
+        # v4 (bản này): THAY VÌ vá tiếp bên trong SDPA, NÉ HẲN con đường kernel SDPA
+        #   hợp nhất bằng attn_implementation="eager" — cách chuẩn của HF khi phần
+        #   cứng/kernel không tương thích SDPA (dùng matmul/softmax tường minh, dễ
+        #   debug, không phụ thuộc heuristic chọn kernel của cuBLAS/cuDNN). Đồng thời
+        #   thêm CUDA_LAUNCH_BLOCKING=1 (đặt ở run_eval.py, trước khi torch được nạp)
+        #   để nếu VẪN lỗi thì traceback trỏ đúng dòng thật, không còn đoán mò.
         if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
             if cc[0] < 8:  # Turing (T4), Volta, Pascal...
-                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → Kích hoạt Nuclear Fix: float16 model + float32 Qwen2MLP.")
-                
-                # TẮT Flash/MemEfficient SDPA trên Turing! Các kernel SDPA tối ưu này
-                # bị lỗi "device-side assert" (out-of-bounds) khi nhận attention_mask 4D
-                # tuỳ biến của Qwen2 trong chế độ hybrid parallel decoding. Chỉ dùng Math SDPA!
+                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → mặc định dùng attn_implementation=eager "
+                      "(SDPA hợp nhất từng crash CUBLAS_STATUS_EXECUTION_FAILED trên kiến trúc này).")
                 torch.backends.cuda.enable_flash_sdp(False)
                 torch.backends.cuda.enable_mem_efficient_sdp(False)
                 torch.backends.cuda.enable_math_sdp(True)
-
-                # Monkey-patch Qwen2DecoderLayer và Qwen2MLP của mô hình BUNDLED.
-                # Do trust_remote_code=True, mô hình dùng file modeling_qwen2.py riêng biệt,
-                # không dùng transformers.models.qwen2 chuẩn. Ta phải vá trực tiếp class của nó.
-                
-                qwen2_layer_cls = None
-                qwen2_mlp_cls = None
-                
-                # Hàm load() chưa tạo self.model, nên ta phải vá sau khi gọi AutoModel.from_pretrained.
-                # NHƯNG wait, đoạn code này chạy TRƯỚC AutoModel.from_pretrained!
-                # Cần lùi logic patch này XUỐNG SAU KHI TẠO self.model!
 
         # In RÕ phiên bản để hết đoán mò: model được NVIDIA test với transformers
         # 4.57.1. Bản khác vẫn chạy nhờ các bản vá độc lập phiên bản, nhưng biết
@@ -166,7 +166,10 @@ class LocateAnythingDetector:
         # (T4/Turing cũng không được flash-attn 2 hỗ trợ tốt). Cho phép ép tay qua
         # LA_ATTN=eager để CHẨN ĐOÁN: "eager" có raise ValueError rõ ràng khi kích
         # model tự tính position_ids phù hợp với RoPE cache của nó.
-        attn_impl = os.environ.get("LA_ATTN", "sdpa")
+        # MẶC ĐỊNH ĐỔI sang "eager" (xem lý do ở khối comment "v4" phía trên) — SDPA
+        # đã crash lặp lại nhiều lần trên T4. Cho phép ép tay: LA_ATTN=sdpa để quay
+        # lại đường cũ (đối chiếu), hoặc flash_attention_2 nếu gói có sẵn.
+        attn_impl = os.environ.get("LA_ATTN", "eager")
         self.model = AutoModel.from_pretrained(
             self.model_dir,
             config=config,
@@ -178,7 +181,12 @@ class LocateAnythingDetector:
             self.model = self.model.to("cuda:0")
             
         # =========================================================================
-        if torch.cuda.is_available() and not self._cpu_debug and cc[0] < 8:
+        # CHUỖI VÁ SÂU DƯỚI ĐÂY (global SDPA / Linear / DecoderLayer / MLP) chỉ còn
+        # ý nghĩa khi ĐANG DÙNG attn_implementation="sdpa" (đường cũ, giữ lại để đối
+        # chiếu qua LA_ATTN=sdpa). Với "eager" (mặc định mới), model không gọi
+        # F.scaled_dot_product_attention nữa → patch vô nghĩa, CHỦ ĐỘNG BỎ QUA để
+        # giảm bề mặt lỗi (ít code tự viết chen vào forward gốc của model hơn).
+        if torch.cuda.is_available() and not self._cpu_debug and cc[0] < 8 and attn_impl == "sdpa":
             if not getattr(torch.nn.functional, "_la_patched_sdpa", False):
                 orig_sdpa = torch.nn.functional.scaled_dot_product_attention
                 def safe_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, **kwargs):
@@ -306,13 +314,34 @@ class LocateAnythingDetector:
                     lm_head.forward = _safe_lm_forward
                     lm_head._la_patched = True
                     print("🔧 Patched lm_head (downcast to float16)")
+
+        elif torch.cuda.is_available() and not self._cpu_debug and cc[0] < 8:
+            # Đường "eager" mới: KHÔNG vá sâu forward nội bộ (bề mặt lỗi tối thiểu),
+            # chỉ thêm 1 lưới an toàn RẺ và AN TOÀN — kẹp NaN/Inf ở đầu ra cuối cùng
+            # (lm_head) trước khi lấy logits để sample token. Không đụng gì tới
+            # attention/MLP nội bộ nên không thể là nguyên nhân gây lỗi mới.
+            if hasattr(self.model, "language_model") and hasattr(self.model.language_model, "lm_head"):
+                lm_head = self.model.language_model.lm_head
+                if not getattr(lm_head, "_la_patched", False):
+                    _orig_lm_forward = lm_head.forward
+
+                    def _safe_lm_forward(x, orig=_orig_lm_forward):
+                        x = torch.nan_to_num(x, nan=0.0, posinf=65000.0, neginf=-65000.0)
+                        return orig(x)
+
+                    lm_head.forward = _safe_lm_forward
+                    lm_head._la_patched = True
+                    print("🔧 [eager] Chỉ vá lm_head (nan_to_num đầu ra cuối) — không đụng attention/MLP nội bộ.")
         # =========================================================================
 
         self.model.eval()
         self._loaded = True
-        print(f"✅ Loaded in {time.time() - t0:.1f}s (device={self.model.device})")
+        print(f"✅ Loaded in {time.time() - t0:.1f}s (device={self.model.device}, attn={attn_impl})")
         if torch.cuda.is_available() and not self._cpu_debug:
-            print(f"   GPU Mem: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
+            alloc = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            print(f"   GPU Mem: allocated={alloc:.1f}GB reserved={reserved:.1f}GB / total={total:.1f}GB")
         return self
 
     # ------------------------------------------------------------------ #
@@ -403,6 +432,32 @@ class LocateAnythingDetector:
                 except TypeError as e:  # kwarg không được hỗ trợ → thử bộ gọn hơn
                     last_err = e
                     continue
+                except RuntimeError as e:
+                    # CUBLAS_STATUS_EXECUTION_FAILED thường bị nhầm là bug kernel,
+                    # nhưng cũng CÓ THỂ chỉ là OOM đội lốt (cuBLAS không cấp phát
+                    # được workspace khi VRAM gần đầy). In rõ số liệu để phân biệt
+                    # NGAY LÚC CRASH thay vì đoán mò sau đó.
+                    if torch.cuda.is_available():
+                        try:
+                            alloc = torch.cuda.memory_allocated() / 1024**3
+                            reserved = torch.cuda.memory_reserved() / 1024**3
+                            total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                            free_frac = 1 - reserved / total
+                            print("=" * 74)
+                            print(f"💥 RuntimeError trong generate(): {e}")
+                            print(f"   GPU Mem lúc crash: allocated={alloc:.1f}GB reserved={reserved:.1f}GB "
+                                  f"/ total={total:.1f}GB (còn trống ước ~{free_frac*100:.0f}%)")
+                            if free_frac < 0.08:
+                                print("   ⚠️  VRAM gần cạn lúc crash → NHIỀU KHẢ NĂNG là OOM đội lốt cuBLAS,"
+                                      " không phải lỗi kernel. Thử giảm --n, giảm max_new_tokens, hoặc ảnh"
+                                      " nhỏ hơn.")
+                            else:
+                                print("   ℹ️  VRAM còn nhiều lúc crash → khó là OOM thuần tuý. Xem traceback"
+                                      " phía trên (CUDA_LAUNCH_BLOCKING=1 đã bật → dòng cuối là thủ phạm thật).")
+                            print("=" * 74, flush=True)
+                        except Exception:
+                            pass
+                    raise
         if output is None:
             raise last_err if last_err else RuntimeError("generate() thất bại")
 
