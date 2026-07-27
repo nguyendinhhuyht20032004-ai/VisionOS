@@ -376,11 +376,12 @@ class LocateAnythingDetector:
             inputs = proc(text=[text], images=[pil_image], return_tensors="pt")
         inputs = {k: self._prep_input(v) for k, v in inputs.items()}
 
-        # KHÔNG XÓA position_ids nữa!
-        # Vì lỗi RoPE cache out-of-bounds đã được sửa hoàn toàn (luôn trả về full cache),
-        # ta CẦN truyền position_ids gốc của processor vào. Việc thiếu position_ids
-        # là nguyên nhân khiến mask 4D của model bị sai lệch shape và gây lỗi
-        # CUBLAS_STATUS_EXECUTION_FAILED ở bước SDPA.
+        # XÓA position_ids! Processor tạo position_ids bao gồm offset cho image tokens,
+        # dẫn đến chỉ số vượt quá kích thước embedding table / RoPE cache của model.
+        # Hậu quả: CUDA assertion `vectorized_gather_kernel: index out of bounds`.
+        # Khi bỏ position_ids, model tự tính position_ids tuần tự từ 0, luôn nằm
+        # trong phạm vi hợp lệ. Global SDPA Firewall đã xử lý float16 overflow.
+        inputs.pop("position_ids", None)
         
         # generate() TÙY BIẾN của model: cần generation_mode="hybrid" (mặc định của
         # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
