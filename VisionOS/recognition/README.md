@@ -203,6 +203,20 @@ mỗi video (không nạp model, vài giây), kẻ **lưới % 0→100** rồi v
 sai chỗ vật đi qua, đọc toạ độ theo lưới rồi chỉnh bằng `--line`/`--zone` (áp cho mọi
 video được lọc). Vạch đặt sai = đếm ra 0 (đây là lý do IN/OUT=0 trước đây, không phải model).
 
+**TỰ VẼ bằng chuột (khỏi đoán toạ độ)** — `recognition/draw_tool.py` cho canvas HTML+JS
+(chạy trên Kaggle, không cần cài gì) để bấm chuột vẽ **nhiều vùng + nhiều vạch** ngay
+trên frame thật; công cụ tự xuất chuỗi `--zone`/`--line` theo %. Trong notebook:
+
+```python
+from IPython.display import HTML
+from recognition.draw_tool import draw_for
+HTML(draw_for("subway"))       # walk/store/square/milk/conv_pkg/'giao lộ'…
+```
+
+Copy toạ độ ra rồi chạy `--zone/--line`, hoặc gửi lại để đưa vào catalog (mỗi vùng
+thành 1 `VideoScenario` riêng — như `market-square` đang có cả bài VẠCH lẫn bài VÙNG
+trên cùng 1 video, scorecard in mỗi vùng 1 dòng).
+
 `--suite` chạy `QUERY_SUITES` (trong `recognition/video_catalog.py`) — mỗi bài toán
 có **20–30+ query phân nhóm**: cơ bản · màu/trang phục · phụ kiện · hành động/quan hệ ·
 đếm/nhóm · khó/phủ định · **tiếng Việt** (kiểm tra đa ngữ). Scorecard thêm cột **nhóm**.
