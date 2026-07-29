@@ -53,14 +53,14 @@ class LocateAnythingDetector:
         env_dtype = (os.environ.get("LA_DTYPE") or "").lower()
         if self._cpu_debug or not torch.cuda.is_available():
             self.dtype = torch.float32
-        elif env_dtype in ("float16", "fp16", "half"):
-            self.dtype = torch.float16
+        elif env_dtype in ("bfloat16", "bf16"):
+            self.dtype = torch.bfloat16
         elif env_dtype in ("float32", "fp32"):
             self.dtype = torch.float32
         else:
-            self.dtype = torch.bfloat16  # mặc định: bf16 (dtype gốc của model)
-
-        self.dtype = torch.float16
+            # Mặc định float16 + SDPA math-backend (chạy ổn trên T4). bf16 từng gây
+            # device-side assert; float32 thì OOM. Ép tay: LA_DTYPE=bfloat16|float32.
+            self.dtype = torch.float16
 
         # LỊCH SỬ (để không lặp lại đường đã thử):
         #   v1: bfloat16 toàn model  → device-side assert ngẫu nhiên ở Conv2d/Linear/RoPE.
@@ -84,8 +84,8 @@ class LocateAnythingDetector:
         if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
             if cc[0] < 8:  # Turing (T4), Volta, Pascal...
-                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → mặc định dùng attn_implementation=eager "
-                      "(SDPA hợp nhất từng crash CUBLAS_STATUS_EXECUTION_FAILED trên kiến trúc này).")
+                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → ép SDPA math-backend (né kernel hợp "
+                      "nhất từng crash CUBLAS_STATUS_EXECUTION_FAILED trên Turing).")
                 torch.backends.cuda.enable_flash_sdp(False)
                 torch.backends.cuda.enable_mem_efficient_sdp(False)
                 torch.backends.cuda.enable_math_sdp(True)
@@ -166,10 +166,13 @@ class LocateAnythingDetector:
         # (T4/Turing cũng không được flash-attn 2 hỗ trợ tốt). Cho phép ép tay qua
         # LA_ATTN=eager để CHẨN ĐOÁN: "eager" có raise ValueError rõ ràng khi kích
         # model tự tính position_ids phù hợp với RoPE cache của nó.
-        # MẶC ĐỊNH ĐỔI sang "eager" (xem lý do ở khối comment "v4" phía trên) — SDPA
-        # đã crash lặp lại nhiều lần trên T4. Cho phép ép tay: LA_ATTN=sdpa để quay
-        # lại đường cũ (đối chiếu), hoặc flash_attention_2 nếu gói có sẵn.
-        attn_impl = os.environ.get("LA_ATTN", "eager")
+        # MẶC ĐỊNH "sdpa": bundled model KHÔNG cài đặt "eager" — decoder forward
+        # raise NotImplementedError(self._attn_implementation='eager'). Chỉ
+        # sdpa/flash_attention_2/magi có nhánh; flash & magi không có trên T4 nên
+        # "sdpa" là lựa chọn DUY NHẤT chạy được. An toàn nhờ: (1) ép SDPA math-backend
+        # cho cc<8 (ở trên) + (2) safe_sdpa upcast f32 (dưới) → không crash cuBLAS.
+        # Ép tay: LA_ATTN=flash_attention_2 nếu cài được flash-attn.
+        attn_impl = os.environ.get("LA_ATTN", "sdpa")
         self.model = AutoModel.from_pretrained(
             self.model_dir,
             config=config,
