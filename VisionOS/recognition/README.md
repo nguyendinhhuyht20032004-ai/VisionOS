@@ -159,6 +159,36 @@ python run_eval.py --model locate --classes person car bottle \
 
 ---
 
+## Test ĐẾM trên VIDEO thật, nhiều kịch bản (`run_scenarios.py`)
+
+Ngoài đếm người (đã test kỹ), có sẵn **catalog video công khai** cho **phương tiện
+vào/ra** và **dây chuyền sản xuất** — tải trực tiếp từ Roboflow supervision assets
+(không cần API key), mỗi bài nhiều video, đã chỉnh sẵn vạch đếm.
+
+| Bài toán | Video (tự tải) | Vạch |
+|----------|----------------|------|
+| 🚗 Phương tiện | `vehicles.mp4`, `vehicles-2.mp4` | ngang |
+| 📦 Dây chuyền | `milk-bottling-plant.mp4` (nhà máy chiết chai) | dọc |
+| 🚶 Người | `people-walking.mp4`, `market-square.mp4`, `subway.mp4` | ngang |
+
+```bash
+python run_scenarios.py --list                       # xem catalog (không tải)
+python run_scenarios.py --task vehicles --max-frames 300
+python run_scenarios.py --task conveyor              # đếm chai trên chuyền
+python run_scenarios.py --task all                   # chạy hết + scorecard
+
+# Hàng KHÔNG thuộc COCO (thùng carton, linh kiện…) → dùng open-vocab:
+python run_scenarios.py --task conveyor --model locate --prompt "thùng carton"
+```
+
+Nguồn video: [supervision assets (Roboflow)](https://supervision.roboflow.com/assets/)
+— CDN `https://media.roboflow.com/supervision/video-examples/`. Thêm/sửa kịch bản
+(video, vị trí vạch, prompt) trong `recognition/video_catalog.py`.
+
+Trên Kaggle: mở **`run_scenarios_kaggle.ipynb`** rồi Run All (GPU + Internet).
+
+---
+
 ## Ví dụ dùng như thư viện
 
 ```python
