@@ -165,22 +165,27 @@ Ngoài đếm người (đã test kỹ), có sẵn **catalog 16 video công khai
 cho **phương tiện vào/ra** và **dây chuyền sản xuất** — tải trực tiếp (không cần API
 key), mỗi bài nhiều video, đã chỉnh sẵn vạch đếm.
 
-| Bài toán | Số video | Góc quay |
-|----------|----------|----------|
-| 🚗 Phương tiện | 6 | cao tốc top-down, giao lộ nhiều làn, phố, đường đông |
-| 📦 Dây chuyền | 5 | chiết chai (YOLO), kiện hàng/thùng carton (open-vocab) |
-| 🚶 Người | 5 | lối đi, quảng trường, ga tàu, siêu thị, vỉa hè |
+| Bài toán | Số video | Ghi chú |
+|----------|----------|---------|
+| 🚗 Phương tiện | 4 | cao tốc, giao lộ, phố (nguồn tin cậy — đã bỏ video sai nhãn) |
+| 📦 Dây chuyền | 6 | chiết chai (YOLO) + kiện hàng/đóng gói (open-vocab) |
+| 🚶 Người | 4 | lối đi, ga tàu, siêu thị, quảng trường |
+
+Mỗi video kèm **danh sách query DỄ→KHÓ** để test khả năng mô tả của LocateAnything.
 
 ```bash
-python run_scenarios.py --list                       # xem 16 video + nguồn
-python run_scenarios.py --task vehicles --max-frames 300
+python run_scenarios.py --list                       # video + query gợi ý
+python run_scenarios.py --task vehicles              # đếm xe (YOLO, nhanh)
 python run_scenarios.py --task conveyor --only milk  # đếm chai (YOLO, nhanh)
-python run_scenarios.py --task people
-python run_scenarios.py --task all                   # chạy hết + scorecard
 
-# Hàng KHÔNG thuộc COCO (thùng carton, sản phẩm…) → open-vocab LocateAnything:
-python run_scenarios.py --task conveyor --model locate --prompt "thùng carton"
+# ĐẾM SẢN PHẨM với QUERY KHÓ (open-vocab) — test nhiều prompt trên mỗi video:
+python run_scenarios.py --task conveyor --all-queries          # query gợi ý sẵn
+python run_scenarios.py --task conveyor --queries "cardboard box,a damaged package"
 ```
+
+Nhãn video được kiểm chứng theo nội dung thật (supervision đặt tên theo nội dung;
+Pexels theo tiêu đề trang). Video sai nhãn từng gặp (nước chảy / giao thông bị gán
+nhầm người) đã bị loại hoặc chuyển đúng bài.
 
 Nguồn video: [supervision assets (Roboflow)](https://supervision.roboflow.com/assets/)
 + [Pexels video-files](https://www.pexels.com) (CDN ổn định, không cần key).

@@ -11,8 +11,9 @@ from recognition.video_catalog import (
 
 
 def test_catalog_large_and_typed():
-    # "nhiều video, nhiều góc quay" → tối thiểu ~15 video
-    assert len(CATALOG) >= 15
+    # nhiều video (đã bỏ video sai nhãn) + rất nhiều query khó
+    assert len(CATALOG) >= 13
+    assert sum(len(v.queries) for v in CATALOG) >= 40   # tổng số ca test
     assert all(isinstance(v, VideoScenario) for v in CATALOG)
 
 
@@ -27,6 +28,27 @@ def test_conveyor_and_vehicles_present():
     assert any(v.task == "vehicles" for v in CATALOG)               # phương tiện
     # có video kiện hàng trên chuyền (đúng bài "đếm sản phẩm")
     assert any("4156510" == v.pexels_id for v in CATALOG)
+
+
+def test_no_mislabeled_videos():
+    # video nước chảy (1093662) đã bị BỎ; 3121459 (thực ra là xe) phải ở bài vehicles
+    ids = {v.pexels_id for v in CATALOG}
+    assert "1093662" not in ids                                     # video nước → đã bỏ
+    v3121459 = [v for v in CATALOG if v.pexels_id == "3121459"]
+    assert v3121459 and v3121459[0].task == "vehicles"             # xe, không phải người
+
+
+def test_conveyor_has_hard_queries_for_products():
+    # bài đếm sản phẩm phải có nhiều query khó (open-vocab) để test
+    for v in by_task("conveyor"):
+        assert len(v.queries) >= 2, f"{v.name} thiếu query để test"
+    # tổng số query sản phẩm đủ phong phú
+    total_q = sum(len(v.queries) for v in by_task("conveyor"))
+    assert total_q >= 15
+
+
+def test_conveyor_has_many_product_videos():
+    assert len(by_task("conveyor")) >= 5      # nhiều video sản phẩm
 
 
 def test_every_entry_has_exactly_one_source():

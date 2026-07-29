@@ -1,26 +1,22 @@
 """Catalog VIDEO CÔNG KHAI (tải trực tiếp) để test đếm trên NHIỀU kịch bản/GÓC QUAY.
 
-Bổ sung cho bộ test đếm NGƯỜI đã có (Test_Model.xlsx): thêm **phương tiện vào/ra**
-và **dây chuyền sản xuất**, mỗi bài NHIỀU video với góc quay khác nhau — để đánh
-giá pipeline detect → track → đếm trên cảnh thật.
+Nguyên tắc chọn nguồn (sau khi phát hiện nhãn của repo bên thứ 3 hay SAI):
+  * ``asset``     — supervision video-examples (Roboflow) đặt tên THEO NỘI DUNG →
+    tin cậy cao (vehicles.mp4 chắc chắn là xe, milk-bottling-plant là dây chuyền…).
+  * ``pexels_id`` — CHỈ dùng ID mà tiêu đề trang Pexels tự mô tả đúng nội dung
+    (vd "packages-moving-on-a-conveyor-belt-4156510"); downloader tự dò hậu tố.
+  * ``url``       — link .mp4 đầy đủ đã xác minh.
 
-Ba nguồn video, đều tải trực tiếp KHÔNG cần API key:
-  * ``asset``      — supervision video-examples (Roboflow), tải qua download_assets
-    (kiểm tra hash). VD: VEHICLES, MILK_BOTTLING_PLANT, PEOPLE_WALKING…
-  * ``url``        — link .mp4 đầy đủ (Pexels video-files) đã xác minh.
-  * ``pexels_id``  — chỉ có ID Pexels → downloader tự dò hậu tố chất lượng
-    (hd_1920_1080_30fps, sd_640_360_25fps…) đến khi tải được.
-
-Dùng:
-    from recognition.video_catalog import CATALOG, by_task, download_video
-    path = download_video(CATALOG[0])     # -> đường dẫn .mp4 cục bộ
+Mỗi video kèm ``queries``: danh sách prompt từ DỄ → KHÓ để test khả năng mô tả
+ngôn ngữ tự nhiên của LocateAnything (open-vocab). Chạy nhiều query trên 1 video
+bằng ``run_scenarios.py --all-queries`` hoặc ``--queries "a,b,c"``.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .base import MonitoringMode
 from .scenarios import CountScenario
@@ -30,7 +26,6 @@ __all__ = ["VideoScenario", "CATALOG", "by_task", "download_video", "RB_CDN", "P
 RB_CDN = "https://media.roboflow.com/supervision/video-examples/"
 PEXELS_CDN = "https://videos.pexels.com/video-files/"
 
-# Hậu tố chất lượng Pexels hay gặp — downloader thử lần lượt (ưu tiên HD gọn nhẹ).
 _PEXELS_QUALITIES = (
     "hd_1920_1080_30fps", "hd_1920_1080_25fps", "hd_1920_1080_24fps",
     "hd_1280_720_30fps", "hd_1280_720_25fps",
@@ -42,16 +37,15 @@ _PEXELS_QUALITIES = (
 
 @dataclass(frozen=True)
 class VideoScenario:
-    """1 video công khai + cấu hình đếm cho video đó."""
-
     name: str
     task: str                          # "vehicles" | "conveyor" | "people"
     scenario: CountScenario
     source: str
-    filename: str                      # tên file lưu cục bộ
-    asset: Optional[str] = None        # tên hằng supervision VideoAssets
-    url: Optional[str] = None          # link .mp4 đầy đủ
-    pexels_id: Optional[str] = None    # chỉ ID Pexels (tự dò hậu tố)
+    filename: str
+    asset: Optional[str] = None
+    url: Optional[str] = None
+    pexels_id: Optional[str] = None
+    queries: Tuple[str, ...] = ()      # prompt dễ→khó (rỗng = dùng scenario.prompt)
     tips: str = ""
 
 
@@ -65,8 +59,8 @@ def _sc(key, title, prompt, model, ls, le, in_lbl, out_lbl, anchor, res, note):
     )
 
 
-def _veh(key, title, res=(1280, 720), y=50.0):
-    return _sc(key, title, "car", "YOLO-NAS-S", (0.0, y), (100.0, y),
+def _veh(key, title, prompt="car", model="YOLO-NAS-S", res=(1280, 720), y=50.0):
+    return _sc(key, title, prompt, model, (0.0, y), (100.0, y),
                "Chiều A", "Chiều B", "CENTER", res, "Xe chạy dọc → vạch NGANG.")
 
 
@@ -75,108 +69,110 @@ def _ppl(key, title, res=(1280, 720), y=50.0):
                "Vào", "Ra", "BOTTOM_CENTER", res, "Người → vạch ngang, neo chân.")
 
 
-def _conv_yolo(key, title, prompt="bottle", res=(1280, 720)):
-    return _sc(key, title, prompt, "YOLO-NAS-S", (50.0, 0.0), (50.0, 100.0),
+def _conv(key, title, prompt, model, res=(1280, 720)):
+    return _sc(key, title, prompt, model, (50.0, 0.0), (50.0, 100.0),
                "Qua vạch", "Ngược", "CENTER", res, "Hàng chạy ngang → vạch DỌC.")
 
 
-def _conv_locate(key, title, prompt, res=(1280, 720)):
-    return _sc(key, title, prompt, "LocateAnything-3B", (50.0, 0.0), (50.0, 100.0),
-               "Qua vạch", "Ngược", "CENTER", res,
-               "Hàng KHÔNG thuộc COCO → open-vocab; vạch DỌC.")
-
-
 # --------------------------------------------------------------------------- #
-# 🚗 PHƯƠNG TIỆN VÀO/RA — 6 góc quay (top-down cao tốc, giao lộ, phố…)
+# 🚗 PHƯƠNG TIỆN — chỉ nguồn tin cậy (supervision + Pexels tiêu đề đúng/đã xác minh)
 # --------------------------------------------------------------------------- #
 _VEHICLES = [
     VideoScenario("Cao tốc top-down (supervision)", "vehicles",
-        _veh("veh_hw", "Xe cao tốc"), "Roboflow supervision · cao tốc quay dọc",
-        "vehicles.mp4", asset="VEHICLES", tips="Kinh điển cho đếm xe."),
+        _veh("veh_hw", "Xe cao tốc"), "Roboflow supervision · cao tốc quay dọc — TIN CẬY",
+        "vehicles.mp4", asset="VEHICLES",
+        queries=("car", "white car", "truck", "a vehicle changing lane"),
+        tips="Kinh điển đếm xe; đổi prompt để test 'truck'/'bus'."),
     VideoScenario("Giao lộ nhiều làn (supervision)", "vehicles",
-        _veh("veh_junc", "Xe giao lộ", y=55.0), "Roboflow supervision · góc khác, nhiều làn",
-        "vehicles-2.mp4", asset="VEHICLES_2"),
+        _veh("veh_junc", "Xe giao lộ", y=55.0), "Roboflow supervision · nhiều làn — TIN CẬY",
+        "vehicles-2.mp4", asset="VEHICLES_2",
+        queries=("car", "bus", "truck", "a car turning")),
     VideoScenario("Cao tốc 1080p (Pexels 2103099)", "vehicles",
-        _veh("veh_px1", "Xe cao tốc 1080p", (1920, 1080)),
-        "Pexels · highway traffic 1920×1080", "traffic_pexels_2103099.mp4",
-        url=PEXELS_CDN + "2103099/2103099-hd_1920_1080_30fps.mp4"),
-    VideoScenario("Phố thành phố (Pexels 1093662)", "vehicles",
-        _veh("veh_px2", "Xe trong phố", (1920, 1080)),
-        "Pexels · city traffic 1920×1080", "traffic_pexels_1093662.mp4",
-        url=PEXELS_CDN + "1093662/1093662-hd_1920_1080_30fps.mp4"),
-    VideoScenario("Đường đông (Pexels 5750647)", "vehicles",
-        _veh("veh_px3", "Xe đường đông", (1920, 1080)),
-        "Pexels · busy street 1920×1080", "traffic_pexels_5750647.mp4",
-        url=PEXELS_CDN + "5750647/5750647-hd_1920_1080_24fps.mp4"),
-    VideoScenario("Giao lộ bận (Pexels 2053100)", "vehicles",
-        _veh("veh_px4", "Xe giao lộ bận", (640, 360)),
-        "Pexels · busy intersection (SD)", "traffic_pexels_2053100.mp4",
-        pexels_id="2053100", tips="Xe+buýt qua ngã tư; đổi prompt 'bus'/'truck'."),
+        _veh("veh_px1", "Xe cao tốc 1080p", res=(1920, 1080)),
+        "Pexels · highway traffic (tiêu đề Pexels: highway)", "traffic_pexels_2103099.mp4",
+        pexels_id="2103099", queries=("car", "truck")),
+    VideoScenario("Giao thông (Pexels 3121459)", "vehicles",
+        _veh("veh_px2", "Xe cộ trên phố", res=(640, 360)),
+        "Pexels 3121459 · NGƯỜI DÙNG XÁC NHẬN là giao thông (không phải người đi bộ)",
+        "traffic_pexels_3121459.mp4", pexels_id="3121459",
+        queries=("car", "motorcycle", "a vehicle")),
 ]
 
 # --------------------------------------------------------------------------- #
-# 📦 DÂY CHUYỀN SẢN XUẤT — chai (YOLO) + thùng/hàng hoá (open-vocab LocateAnything)
+# 📦 DÂY CHUYỀN SẢN XUẤT — nhiều video + NHIỀU QUERY KHÓ (open-vocab)
+#    Nguồn Pexels lấy từ TIÊU ĐỀ TRANG (Pexels tự mô tả nội dung) → tin cậy hơn.
 # --------------------------------------------------------------------------- #
 _CONVEYOR = [
     VideoScenario("Nhà máy chiết chai (supervision)", "conveyor",
-        _conv_yolo("conv_milk", "Đếm chai"), "Roboflow supervision · dây chuyền chiết sữa, chai chạy ngang",
-        "milk-bottling-plant.mp4", asset="MILK_BOTTLING_PLANT",
-        tips="'bottle' là lớp COCO → YOLO đếm được."),
+        _conv("conv_milk", "Đếm chai", "bottle", "YOLO-NAS-S"),
+        "Roboflow supervision · dây chuyền chiết sữa — TIN CẬY", "milk-bottling-plant.mp4",
+        asset="MILK_BOTTLING_PLANT",
+        queries=("bottle", "plastic bottle", "milk bottle", "bottle cap",
+                 "a bottle without a cap", "a fallen bottle"),
+        tips="'bottle' chạy YOLO nhanh; query khó cần --model locate."),
     VideoScenario("Kiện hàng trên chuyền (Pexels 4156510)", "conveyor",
-        _conv_locate("conv_pkg", "Đếm kiện hàng", "cardboard box on a conveyor belt"),
-        "Pexels · packages moving on conveyor belt", "conveyor_packages_4156510.mp4",
-        pexels_id="4156510", tips="Thùng carton KHÔNG thuộc COCO → chạy --model locate."),
+        _conv("conv_pkg", "Đếm kiện hàng", "cardboard box on a conveyor belt", "LocateAnything-3B"),
+        "Pexels · 'packages moving on a conveyor belt'", "conveyor_packages_4156510.mp4",
+        pexels_id="4156510",
+        queries=("cardboard box", "package", "a sealed box", "a brown box",
+                 "a damaged package", "the largest box"),
+        tips="Bài 'đếm sản phẩm' điển hình — thùng carton KHÔNG thuộc COCO."),
     VideoScenario("Băng chuyền nhà máy (Pexels 4473250)", "conveyor",
-        _conv_locate("conv_fac", "Đếm vật trên chuyền", "item on the conveyor belt"),
-        "Pexels · factory conveyor belt", "conveyor_factory_4473250.mp4",
-        pexels_id="4473250", tips="Đổi prompt theo mặt hàng thật của bạn."),
+        _conv("conv_fac", "Đếm vật trên chuyền", "item on the conveyor belt", "LocateAnything-3B"),
+        "Pexels · 'factory conveyor belt'", "conveyor_factory_4473250.mp4",
+        pexels_id="4473250",
+        queries=("item on the conveyor belt", "product", "a metal part", "a small component")),
     VideoScenario("Băng chuyền cận cảnh (Pexels 4473187)", "conveyor",
-        _conv_locate("conv_black", "Đếm vật băng chuyền", "product on the conveyor belt"),
-        "Pexels · black conveyor belt close-up", "conveyor_black_4473187.mp4",
-        pexels_id="4473187"),
+        _conv("conv_close", "Đếm vật băng chuyền", "product on the conveyor belt", "LocateAnything-3B"),
+        "Pexels · 'black conveyor belt' cận cảnh", "conveyor_black_4473187.mp4",
+        pexels_id="4473187",
+        queries=("object on the belt", "product", "a dark colored item")),
     VideoScenario("Dây chuyền hiện đại (Pexels 30715848)", "conveyor",
-        _conv_locate("conv_line", "Đếm sản phẩm dây chuyền", "product on the production line"),
-        "Pexels · modern factory production line", "conveyor_line_30715848.mp4",
-        pexels_id="30715848"),
+        _conv("conv_line", "Đếm sản phẩm dây chuyền", "product on the production line", "LocateAnything-3B"),
+        "Pexels · 'wide view of modern factory production line'", "conveyor_line_30715848.mp4",
+        pexels_id="30715848",
+        queries=("product on the production line", "finished product", "an item being assembled")),
+    VideoScenario("Đóng gói sản phẩm (Pexels 4480985)", "conveyor",
+        _conv("conv_pack2", "Đếm sản phẩm đóng gói", "product being packaged", "LocateAnything-3B"),
+        "Pexels · dây chuyền đóng gói (tiêu đề: packaging)", "conveyor_packaging_4480985.mp4",
+        pexels_id="4480985",
+        queries=("packaged product", "a bottle", "a box", "an item on the line")),
 ]
 
 # --------------------------------------------------------------------------- #
-# 🚶 NGƯỜI VÀO/RA — 5 cảnh (lối đi, quảng trường, ga tàu, siêu thị, vỉa hè)
+# 🚶 NGƯỜI — chỉ supervision (đặt tên theo nội dung, tin cậy)
 # --------------------------------------------------------------------------- #
 _PEOPLE = [
     VideoScenario("Lối đi bộ top-down (supervision)", "people",
-        _ppl("ppl_walk", "Người đi bộ"), "Roboflow supervision · lối đi bộ, mật độ vừa",
-        "people-walking.mp4", asset="PEOPLE_WALKING"),
-    VideoScenario("Quảng trường đông (supervision)", "people",
-        _ppl("ppl_square", "Người quảng trường"), "Roboflow supervision · quảng trường, nhiều hướng",
-        "market-square.mp4", asset="MARKET_SQUARE", tips="Cảnh đông → recall thấp là bình thường."),
+        _ppl("ppl_walk", "Người đi bộ"), "Roboflow supervision · lối đi bộ — TIN CẬY",
+        "people-walking.mp4", asset="PEOPLE_WALKING",
+        queries=("person", "a person wearing a backpack", "a person in white",
+                 "a child", "a person carrying a bag")),
     VideoScenario("Ga tàu điện (supervision)", "people",
-        _ppl("ppl_subway", "Người ga tàu", y=55.0), "Roboflow supervision · ga tàu, luồng 2 chiều",
-        "subway.mp4", asset="SUBWAY"),
+        _ppl("ppl_subway", "Người ga tàu", y=55.0), "Roboflow supervision · ga tàu, luồng 2 chiều — TIN CẬY",
+        "subway.mp4", asset="SUBWAY",
+        queries=("person", "a person with luggage", "a person wearing a hat")),
     VideoScenario("Siêu thị (supervision)", "people",
-        _ppl("ppl_store", "Người siêu thị"), "Roboflow supervision · lối đi siêu thị",
-        "grocery-store.mp4", asset="GROCERY_STORE"),
-    VideoScenario("Vỉa hè đông người (Pexels 3121459)", "people",
-        _ppl("ppl_side", "Người vỉa hè", (640, 360)),
-        "Pexels · crowded city sidewalk (SD)", "people_sidewalk_3121459.mp4",
-        pexels_id="3121459"),
+        _ppl("ppl_store", "Người siêu thị"), "Roboflow supervision · lối đi siêu thị — TIN CẬY",
+        "grocery-store.mp4", asset="GROCERY_STORE",
+        queries=("person", "a shopper pushing a cart", "a person holding a basket")),
+    VideoScenario("Quảng trường (supervision)", "people",
+        _ppl("ppl_square", "Người quảng trường"), "Roboflow supervision · quảng trường (người đi lại nhiều hướng)",
+        "market-square.mp4", asset="MARKET_SQUARE",
+        queries=("person", "a person walking a dog", "a group of people"),
+        tips="Người đi nhiều hướng (không rõ luồng vào/ra) → hợp đếm VÙNG hơn cắt vạch."),
 ]
 
 CATALOG: List[VideoScenario] = [*_VEHICLES, *_CONVEYOR, *_PEOPLE]
 
 
 def by_task(task: Optional[str] = None) -> List[VideoScenario]:
-    """Lọc catalog theo bài ('vehicles' | 'conveyor' | 'people'); None = tất cả."""
     if not task:
         return list(CATALOG)
     return [v for v in CATALOG if v.task == task]
 
 
-# --------------------------------------------------------------------------- #
-# Tải video (3 nguồn) — bền bỉ: đã có file thì bỏ qua; thử nhiều URL rồi mới bỏ.
-# --------------------------------------------------------------------------- #
 def _fetch(url: str, dest: str, min_bytes: int = 200_000) -> bool:
-    """Tải 1 URL về dest; True nếu ra file > min_bytes (lọc trang lỗi/HTML nhỏ)."""
     import urllib.request
 
     try:
@@ -200,13 +196,11 @@ def _fetch(url: str, dest: str, min_bytes: int = 200_000) -> bool:
 
 
 def download_video(vs: VideoScenario, dest_dir: str = "videos") -> str:
-    """Tải video của 1 :class:`VideoScenario`, trả đường dẫn .mp4. Raise nếu thất bại."""
     os.makedirs(dest_dir, exist_ok=True)
     dest = os.path.join(dest_dir, vs.filename)
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return dest
 
-    # (1) supervision asset — chính thức, có hash-check.
     if vs.asset:
         try:
             from supervision.assets import VideoAssets, download_assets
@@ -225,15 +219,12 @@ def download_video(vs: VideoScenario, dest_dir: str = "videos") -> str:
         except Exception as e:  # noqa: BLE001
             print(f"  ℹ️  supervision.assets lỗi ({e}); thử nguồn khác…")
 
-    # (2) URL .mp4 đầy đủ.
     if vs.url and _fetch(vs.url, dest):
         return dest
 
-    # (3) Pexels chỉ có ID → dò hậu tố chất lượng đến khi tải được.
     if vs.pexels_id:
         for q in _PEXELS_QUALITIES:
             url = f"{PEXELS_CDN}{vs.pexels_id}/{vs.pexels_id}-{q}.mp4"
-            print(f"  ⬇️  thử {q} …")
             if _fetch(url, dest):
                 return dest
 

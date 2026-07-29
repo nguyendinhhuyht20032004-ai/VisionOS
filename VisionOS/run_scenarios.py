@@ -85,19 +85,29 @@ def run(args) -> int:
             print(f"    nguồn : {v.source}")
             print(f"    tải   : {src}")
             print(f"    vạch  : {s.line_start_pct}→{s.line_end_pct}  prompt={s.prompt!r}  model={s.model}")
+            if v.queries:
+                print(f"    query : {' | '.join(v.queries)}")
             if v.tips:
                 print(f"    mẹo   : {v.tips}")
             print()
         return 0
 
+    from dataclasses import replace
+
     from recognition.detectors import load_locate_anything, load_standard_detector
+
+    # Query khó → open-vocab (LocateAnything). Nếu test nhiều query mà chưa chỉ định
+    # model thì tự chuyển sang locate (YOLO chỉ biết lớp COCO, không hiểu mô tả).
+    manual_queries = [q.strip() for q in args.queries.split(",") if q.strip()] if args.queries else None
+    testing_queries = bool(manual_queries) or args.all_queries
+    if testing_queries and args.model == "auto":
+        args.model = "locate"
 
     def _wants_locate(model_field: str) -> bool:
         return args.model == "locate" or (args.model == "auto" and not model_field.startswith("YOLO"))
 
-    # Nếu SẼ dùng LocateAnything (vd đếm thùng carton trên chuyền), đảm bảo
-    # transformers==4.57.1 TRƯỚC khi nạp model (giống run_eval) — có thể re-exec.
-    if any(_wants_locate(v.scenario.model) for v in scenarios):
+    # Nếu SẼ dùng LocateAnything, đảm bảo transformers==4.57.1 TRƯỚC khi nạp (re-exec).
+    if args.model == "locate" or any(_wants_locate(v.scenario.model) for v in scenarios):
         try:
             from run_eval import _autopin_transformers
 
@@ -126,29 +136,32 @@ def run(args) -> int:
         except Exception as e:  # noqa: BLE001
             print(f"  ❌ tải video lỗi: {e}")
             continue
-        sc = v.scenario
-        if args.prompt:  # cho phép ép prompt (ví dụ hàng không thuộc COCO)
-            sc = _with_prompt(sc, args.prompt)
-        detector = get_detector(sc.model)
-        pipe = CountingPipeline(detector, sc)
-        pipe.run(_frames_of(path, sc.resolution), max_frames=args.max_frames)
-        r = pipe.result.as_row()
-        row = {"video": v.name, "task": v.task, **r}
-        row["verdict"] = "✅" if (r.get("det/frame", 0) > 0 and r.get("total", 0) >= sc.expect_min) else "⚠️"
-        rows.append(row)
-        print(f"  → IN={r.get('IN')} OUT={r.get('OUT')} total={r.get('total')} "
-              f"det/frame={r.get('det/frame')} fps={r.get('fps')}")
+
+        # Chọn danh sách prompt để test trên video này (DỄ→KHÓ).
+        if manual_queries:
+            qlist = manual_queries
+        elif args.all_queries:
+            qlist = list(v.queries) or [v.scenario.prompt]
+        elif args.prompt:
+            qlist = [args.prompt]
+        else:
+            qlist = [v.scenario.prompt]
+
+        for q in qlist:
+            sc = replace(v.scenario, prompt=q)
+            detector = get_detector(sc.model)
+            pipe = CountingPipeline(detector, sc)
+            pipe.run(_frames_of(path, sc.resolution), max_frames=args.max_frames)
+            r = pipe.result.as_row()
+            row = {"video": v.name, "task": v.task, "query": q, **r}
+            row["verdict"] = "✅" if (r.get("det/frame", 0) > 0 and r.get("total", 0) >= sc.expect_min) else "⚠️"
+            rows.append(row)
+            print(f"  · query={q!r} → IN={r.get('IN')} OUT={r.get('OUT')} "
+                  f"total={r.get('total')} det/frame={r.get('det/frame')} fps={r.get('fps')}")
 
     print(f"\n{'='*70}\n📊 SCORECARD — đếm trên video thật (IoU tracking + cắt vạch)\n{'='*70}")
     print_scorecard(rows)
     return 0
-
-
-def _with_prompt(scenario, prompt):
-    """Tạo bản sao scenario với prompt khác (CountScenario là frozen)."""
-    from dataclasses import replace
-
-    return replace(scenario, prompt=prompt)
 
 
 def main() -> int:
@@ -156,7 +169,12 @@ def main() -> int:
     ap.add_argument("--task", default="all", choices=["all", "vehicles", "conveyor", "people"])
     ap.add_argument("--model", default="auto", choices=["auto", "yolo", "locate"],
                     help="auto = theo scenario (mặc định YOLO cho car/person/bottle)")
-    ap.add_argument("--prompt", default=None, help="ép prompt (vd hàng không thuộc COCO: 'thùng carton')")
+    ap.add_argument("--prompt", default=None, help="ép 1 prompt cho mọi video")
+    ap.add_argument("--queries", default=None,
+                    help="danh sách prompt ngăn cách bởi dấu phẩy, test lần lượt trên mỗi video "
+                         "(vd 'cardboard box,plastic bottle,damaged package') — tự bật open-vocab")
+    ap.add_argument("--all-queries", action="store_true",
+                    help="test TẤT CẢ query khó gợi ý sẵn của mỗi video (cột 'queries' trong --list)")
     ap.add_argument("--max-frames", type=int, default=300)
     ap.add_argument("--confidence", type=float, default=0.35)
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
