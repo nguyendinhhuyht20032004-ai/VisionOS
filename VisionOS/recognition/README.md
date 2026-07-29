@@ -178,6 +178,13 @@ python run_scenarios.py --list                       # video + query gợi ý
 python run_scenarios.py --task vehicles              # đếm xe (YOLO, nhanh)
 python run_scenarios.py --task conveyor --only milk  # đếm chai (YOLO, nhanh)
 
+# ⭐ XEM TRƯỚC vạch/vùng trên MỌI video (không cần model) — ĐẶT VẠCH cho đúng rồi mới đếm:
+python run_scenarios.py --preview prev               # vẽ lưới % + vạch/vùng lên frame CÓ vật
+#   → prev/_ALL.jpg = ảnh TỔNG HỢP mọi trường hợp; prev/<task>_<key>.jpg = từng cảnh full-res
+# Vạch/vùng đặt sai chỗ vật đi qua? Thử ngay toạ độ khác (theo % đọc trên lưới):
+python run_scenarios.py --only milk --preview prev --line "35,0,35,100"   # vạch dọc lệch trái
+python run_scenarios.py --only milk --save-dir out --line "35,0,35,100"   # ưng thì đếm luôn
+
 # LƯU VIDEO OUTPUT (vẽ vạch/vùng + box + track-id + số đếm) để soi mắt thường:
 python run_scenarios.py --task people --save-dir out_videos
 
@@ -189,6 +196,12 @@ python run_scenarios.py --task conveyor --queries "cardboard box,a damaged packa
 python run_scenarios.py --task conveyor --only milk --suite    # ~27 query/6 nhóm
 python run_scenarios.py --task people   --only walk --suite    # ~31 query/7 nhóm
 ```
+
+`--preview [thư_mục]` là bước **QUAN TRỌNG trước khi đếm**: nó lấy 1 frame CÓ vật của
+mỗi video (không nạp model, vài giây), kẻ **lưới % 0→100** rồi vẽ vạch (vàng) / vùng
+(xanh) kèm **nhãn toạ độ**. Nhìn `_ALL.jpg` (tổng hợp mọi trường hợp) → nếu vạch đặt
+sai chỗ vật đi qua, đọc toạ độ theo lưới rồi chỉnh bằng `--line`/`--zone` (áp cho mọi
+video được lọc). Vạch đặt sai = đếm ra 0 (đây là lý do IN/OUT=0 trước đây, không phải model).
 
 `--suite` chạy `QUERY_SUITES` (trong `recognition/video_catalog.py`) — mỗi bài toán
 có **20–30+ query phân nhóm**: cơ bản · màu/trang phục · phụ kiện · hành động/quan hệ ·

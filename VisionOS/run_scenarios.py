@@ -88,14 +88,14 @@ def _draw_overlay(frame, tracked, pipe):
         cv2.rectangle(img, (x1, y1), (x2, y2), CYAN, 2)
         tid = d.track_id if d.track_id is not None else "?"
         cv2.putText(img, f"#{tid}", (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, CYAN, 1)
-    # Banner số đếm
+    # Banner số đếm (chuyển ASCII vì cv2.putText KHÔNG vẽ được dấu tiếng Việt → "V??o")
     r = pipe.result
     if pipe.line is not None:
         txt = f"{pipe.scenario.in_label}:{r.in_count}  {pipe.scenario.out_label}:{r.out_count}  frame:{r.frames}"
     else:
         txt = f"trong vung:{r.zone_current}  dinh:{r.zone_peak}  frame:{r.frames}"
     cv2.rectangle(img, (0, 0), (w, 28), (0, 0, 0), -1)
-    cv2.putText(img, txt, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, WHITE, 2)
+    cv2.putText(img, _ascii(txt), (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, WHITE, 2)
     return img
 
 
@@ -103,8 +103,34 @@ def _safe_name(s: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in s)[:60]
 
 
+def _ascii(s: str) -> str:
+    """Bỏ dấu tiếng Việt để cv2.putText hiển thị được (cv2 KHÔNG vẽ Unicode → 'V??o')."""
+    import unicodedata
+
+    s = s.replace("đ", "d").replace("Đ", "D")
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+
+
+def _draw_pct_grid(frame, step=10):
+    """Kẻ LƯỚI % (0..100) + nhãn để BẠN đọc thẳng toạ độ đặt vạch/vùng trên ảnh."""
+    import cv2
+
+    h, w = frame.shape[:2]
+    for p in range(step, 100, step):
+        x, y = int(w * p / 100), int(h * p / 100)
+        cv2.line(frame, (x, 0), (x, h), (55, 55, 55), 1)
+        cv2.line(frame, (0, y), (w, y), (55, 55, 55), 1)
+    for p in range(0, 101, 20):          # nhãn % dày hơn ở mốc 0/20/.../100
+        x, y = int(w * p / 100), int(h * p / 100)
+        cv2.putText(frame, str(p), (min(x + 2, w - 22), 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 215, 215), 1)
+        cv2.putText(frame, str(p), (2, min(max(y + 4, 13), h - 3)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 215, 215), 1)
+    return frame
+
+
 def _draw_scenario_geom(frame, sc):
-    """Vẽ VẠCH (vàng) hoặc VÙNG (xanh mờ) của scenario lên frame — để xem đặt đúng chưa."""
+    """Vẽ VẠCH (vàng)/VÙNG (xanh) + NHÃN TOẠ ĐỘ % — để bạn thấy đang đặt ở đâu mà chỉnh."""
     import cv2
     import numpy as np
 
@@ -115,13 +141,25 @@ def _draw_scenario_geom(frame, sc):
         cv2.fillPoly(ov, [pts], (0, 170, 0))
         cv2.addWeighted(ov, 0.3, frame, 0.7, 0, frame)
         cv2.polylines(frame, [pts], True, (0, 255, 0), 3)
-        cv2.putText(frame, "VUNG", (pts[0][0] + 4, pts[0][1] + 22),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        for (px, py), (xp, yp) in zip(pts, sc.zone_points_pct):  # chấm + toạ độ % mỗi đỉnh
+            cv2.circle(frame, (int(px), int(py)), 4, (0, 255, 0), -1)
+            cv2.putText(frame, f"({xp:.0f},{yp:.0f})", (int(px) + 5, int(py) - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+        cv2.putText(frame, "VUNG (zone)", (pts[0][0] + 4, pts[0][1] + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     else:
+        (x1, y1), (x2, y2) = sc.line_start_pct, sc.line_end_pct
         (sx, sy), (ex, ey) = sc.build_line().endpoints(w, h)
         cv2.line(frame, (int(sx), int(sy)), (int(ex), int(ey)), (0, 255, 255), 3)
-        cv2.putText(frame, "VACH", (int(sx) + 6, 34),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+        if abs(x1 - x2) < 1e-6:
+            lbl = f"VACH doc x={x1:.0f}"
+        elif abs(y1 - y2) < 1e-6:
+            lbl = f"VACH ngang y={y1:.0f}"
+        else:
+            lbl = f"VACH ({x1:.0f},{y1:.0f})->({x2:.0f},{y2:.0f})"
+        mx, my = int((sx + ex) / 2), int((sy + ey) / 2)
+        cv2.putText(frame, lbl, (min(max(mx - 60, 4), w - 230), max(my - 8, 48)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
     return frame
 
 
@@ -162,36 +200,64 @@ def run(args) -> int:
         return sc
 
     if args.preview is not None:
-        # Vẽ vạch/vùng lên FRAME ĐẦU của mỗi video (KHÔNG cần model) → xem đặt đúng chưa.
+        # Vẽ LƯỚI % + vạch/vùng lên frame CÓ VẬT của MỌI video (KHÔNG cần model)
+        # → bạn xem đặt đúng chưa rồi báo toạ độ mới, hoặc thử ngay --line/--zone.
         import cv2
+        import numpy as np
 
         outdir = args.preview or "geom_preview"
         os.makedirs(outdir, exist_ok=True)
-        seen = set()
+        seen, thumbs = set(), []
         for v in scenarios:
-            if v.filename in seen:
+            sc0 = _apply_geom(v.scenario)
+            if sc0.key in seen:        # dedup theo KỊCH BẢN (market-square có cả line lẫn zone)
                 continue
-            seen.add(v.filename)
+            seen.add(sc0.key)
             try:
                 path = download_video(v)
             except Exception as e:  # noqa: BLE001
                 print(f"  ❌ {v.filename}: {e}")
                 continue
+            # Lấy frame ~giây thứ 2 (đọc tuần tự, tin cậy hơn seek) — frame đầu thường TRỐNG.
             cap = cv2.VideoCapture(path)
-            ok, fr = cap.read()
+            fr = None
+            for _ in range(50):
+                ok, f = cap.read()
+                if not ok:
+                    break
+                fr = f
             cap.release()
-            if not ok:
+            if fr is None:
                 print(f"  ❌ không đọc được frame: {v.filename}")
                 continue
-            sc = _apply_geom(v.scenario)
-            fr = cv2.resize(fr, tuple(sc.resolution))
-            _draw_scenario_geom(fr, sc)
-            out = os.path.join(outdir, f"{v.task}_{sc.key}.jpg")
+            fr = cv2.resize(fr, tuple(sc0.resolution))
+            _draw_pct_grid(fr)
+            _draw_scenario_geom(fr, sc0)
+            out = os.path.join(outdir, f"{v.task}_{sc0.key}.jpg")
             cv2.imwrite(out, fr)
-            geom = (f"vạch {sc.line_start_pct}->{sc.line_end_pct}" if sc.counting_type == "line"
-                    else f"vùng {sc.zone_points_pct}")
-            print(f"  🖼️  {out}   ({geom})")
-        print(f"\nXem ảnh trong {outdir}/ để chỉnh --line/--zone cho khớp rồi mới chạy đếm.")
+            # thumbnail + tên (ASCII) cho ảnh tổng hợp _ALL.jpg
+            th = cv2.resize(fr, (480, 270))
+            bar = np.zeros((26, 480, 3), np.uint8)
+            cv2.putText(bar, _ascii(f"[{v.task}] {v.name}")[:56], (4, 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            thumbs.append(np.vstack([bar, th]))
+            geom = (f"vạch {sc0.line_start_pct}->{sc0.line_end_pct}" if sc0.counting_type == "line"
+                    else f"vùng {sc0.zone_points_pct}")
+            print(f"  🖼️  {out}   ({sc0.counting_type}: {geom})")
+        # Ảnh TỔNG HỢP: xem HẾT các trường hợp trong 1 ảnh.
+        if thumbs:
+            cols = 2
+            rows = (len(thumbs) + cols - 1) // cols
+            ch, cw = thumbs[0].shape[:2]
+            canvas = np.zeros((rows * ch, cols * cw, 3), np.uint8)
+            for i, t in enumerate(thumbs):
+                r, c = divmod(i, cols)
+                canvas[r * ch:(r + 1) * ch, c * cw:(c + 1) * cw] = t
+            all_path = os.path.join(outdir, "_ALL.jpg")
+            cv2.imwrite(all_path, canvas)
+            print(f"\n  🧩 ẢNH TỔNG HỢP (xem HẾT trong 1 ảnh): {all_path}")
+        print(f"\nXem ảnh trong {outdir}/ (lưới % giúp đọc toạ độ). Muốn đổi vạch/vùng thì báo tôi")
+        print("toạ độ %, hoặc thử ngay:  --only <video> --line 'x1,y1,x2,y2'  /  --zone 'x1,y1;x2,y2;...'")
         return 0
 
     if args.download_only:
