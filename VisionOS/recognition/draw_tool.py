@@ -5,16 +5,15 @@ video (nhúng base64) + JavaScript bắt click. Bạn bấm chuột để vẽ *
 (đa giác) và/hoặc **vạch**; công cụ hiện toạ độ theo **% (0–100)** và xuất sẵn chuỗi
 ``--zone`` / ``--line`` để copy — dán lại cho tôi (đưa vào catalog) hoặc chạy luôn CLI.
 
+Thiết kế KHÔNG có "chế độ": bạn cứ bấm điểm, rồi bấm **Xong VÙNG** (≥3 điểm) hay
+**Xong VẠCH** (2 điểm). Với vùng còn có: bấm lại **điểm đầu** (vòng đỏ) hoặc **bấm đúp**
+để đóng. Nhờ vậy không còn cảnh "kẹt chế độ vạch nên đóng vùng báo lỗi".
+
 Dùng trong notebook:
 
     from IPython.display import HTML
     from recognition.draw_tool import draw_for
     HTML(draw_for("subway"))         # tải video 'subway', hiện canvas để vẽ
-
-Hoặc lưu ra file HTML mở bằng trình duyệt:
-
-    from recognition.draw_tool import save_draw_html
-    save_draw_html("subway", "draw_subway.html")
 """
 
 from __future__ import annotations
@@ -63,28 +62,25 @@ def frame_data_uri(video_path: str, target_index: int = 50,
 
 
 # --------------------------------------------------------------------------- #
-# HTML + JS: canvas vẽ tay. Toàn bộ tính toán % chạy trong TRÌNH DUYỆT (không
-# cần gọi lại kernel) nên chạy tốt trên Kaggle. {uid} tách biệt nhiều cell.
+# HTML + JS: canvas vẽ tay, KHÔNG có chế độ. Toàn bộ tính % chạy trong TRÌNH DUYỆT
+# (không gọi lại kernel) nên chạy tốt trên Kaggle. {uid} tách biệt nhiều cell/canvas.
 # --------------------------------------------------------------------------- #
 _TEMPLATE = r"""
 <div id="wrap-{uid}" style="font-family:system-ui,Arial,sans-serif;max-width:{dispw}px">
   <div style="margin:6px 0;line-height:2">
-    <b>Chế độ:</b>
-    <button id="mline-{uid}">➖ Vạch (line)</button>
-    <button id="mzone-{uid}">⬠ Vùng (zone)</button>
+    <button id="fzone-{uid}" style="background:#16a34a;color:#fff;font-weight:bold;padding:4px 8px">⬠ Xong VÙNG (≥3 điểm)</button>
+    <button id="fline-{uid}" style="background:#3b82f6;color:#fff;font-weight:bold;padding:4px 8px">➖ Xong VẠCH (2 điểm)</button>
     &nbsp;|&nbsp;
-    <button id="close-{uid}">✔ Đóng vùng</button>
     <button id="undo-{uid}">↶ Hoàn tác</button>
     <button id="clear-{uid}">🗑 Xoá hết</button>
-    &nbsp;|&nbsp;
     <button id="copy-{uid}">📋 Copy</button>
   </div>
-  <div id="mode-{uid}" style="margin:4px 0;padding:4px 8px;border-radius:4px;
+  <div id="hint-{uid}" style="margin:4px 0;padding:4px 8px;border-radius:4px;
        background:#123;color:#0f0;font-weight:bold;display:inline-block"></div>
   <div style="font-size:13px;color:#555;margin:4px 0">
-    <b>Vạch</b>: bấm 2 điểm là xong. &nbsp;<b>Vùng</b>: bấm ≥3 điểm, rồi ĐÓNG vùng bằng
-    <b>1 trong 3 cách</b> — (a) bấm lại vào <b>điểm đầu</b> (vòng đỏ), (b) <b>bấm đúp</b>,
-    hoặc (c) nút <b>✔ Đóng vùng</b>. Đóng xong vẽ tiếp vùng khác được ngay.
+    Bấm chuột lên ảnh để thêm điểm (KHÔNG cần chọn chế độ). &nbsp;<b>VẠCH</b>: 2 điểm →
+    nút <b>Xong VẠCH</b>. &nbsp;<b>VÙNG</b>: ≥3 điểm → bấm lại <b>điểm đầu</b> (vòng đỏ) /
+    <b>bấm đúp</b> / nút <b>Xong VÙNG</b>. Đóng xong vẽ hình tiếp theo được ngay.
   </div>
   <canvas id="cv-{uid}" style="border:1px solid #888;cursor:crosshair;touch-action:none"></canvas>
   <div style="margin-top:6px">
@@ -100,41 +96,23 @@ _TEMPLATE = r"""
   const img=new Image();
   const canvas=document.getElementById("cv-{uid}");
   const out=document.getElementById("out-{uid}");
-  const modeTag=document.getElementById("mode-{uid}");
-  const bLine=document.getElementById("mline-{uid}"), bZone=document.getElementById("mzone-{uid}");
+  const hint=document.getElementById("hint-{uid}");
   const scale=Math.min(1, DISPW/W);
   canvas.width=W; canvas.height=H;
   canvas.style.width=(W*scale)+"px"; canvas.style.height=(H*scale)+"px";
   const ctx=canvas.getContext("2d");
-  let mode="zone", shapes=[], cur=[];
+  let shapes=[], cur=[];                       // KHÔNG có biến 'mode'
 
   function pct(p){{ return [ +(p[0]/W*100).toFixed(1), +(p[1]/H*100).toFixed(1) ]; }}
   function dist(a,b){{ return Math.hypot(a[0]-b[0], a[1]-b[1]); }}
+  function finishZone(){{ if(cur.length>=3){{ shapes.push({{type:"zone",pts:cur.slice()}}); cur=[]; redraw(); return true; }} return false; }}
+  function finishLine(){{ if(cur.length>=2){{ shapes.push({{type:"line",pts:[cur[0],cur[cur.length-1]]}}); cur=[]; redraw(); return true; }} return false; }}
 
-  // Chốt vùng đang vẽ (≥3 điểm) vào danh sách. Trả về true nếu chốt được.
-  function closeZone(){{
-    if(cur.length>=3){{ shapes.push({{type:"zone", pts:cur.slice()}}); cur=[]; redraw(); return true; }}
-    return false;
-  }}
-  function setMode(m){{
-    // Chuyển chế độ: nếu đang có vùng dang dở ĐỦ điểm thì chốt luôn (khỏi mất công vẽ).
-    if(mode==="zone" && m!=="zone") closeZone();
-    mode=m; cur=[];
-    modeTag.textContent = (m==="line")
-      ? "▶ ĐANG VẼ VẠCH — bấm 2 điểm"
-      : "▶ ĐANG VẼ VÙNG — bấm ≥3 điểm rồi bấm lại điểm đầu / bấm đúp / nút Đóng vùng";
-    bLine.style.background = m==="line" ? "#3b82f6" : "";
-    bLine.style.color      = m==="line" ? "#fff" : "";
-    bZone.style.background = m==="zone" ? "#16a34a" : "";
-    bZone.style.color      = m==="zone" ? "#fff" : "";
-    redraw();
-  }}
-
-  function shapeDraw(type,pts,color,open){{
+  function poly(pts,color,close){{
     ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=3;
     ctx.beginPath();
     pts.forEach((p,i)=> i? ctx.lineTo(p[0],p[1]) : ctx.moveTo(p[0],p[1]));
-    if(type==="zone" && !open && pts.length>2) ctx.closePath();
+    if(close && pts.length>2) ctx.closePath();
     ctx.stroke();
     pts.forEach(p=>{{ ctx.beginPath(); ctx.arc(p[0],p[1],5,0,7); ctx.fill(); }});
   }}
@@ -149,14 +127,20 @@ _TEMPLATE = r"""
     ctx.fillStyle="#ffd000"; ctx.font="12px monospace";
     for(let p=0;p<=100;p+=20){{ ctx.fillText(p, Math.min(W*p/100+2,W-22), 12);
       ctx.fillText(p, 2, Math.min(Math.max(H*p/100+4,12),H-3)); }}
-    shapes.forEach(s=> shapeDraw(s.type, s.pts, s.type==="line"?"#00e0e0":"#00ff66", false));
-    if(cur.length) shapeDraw(mode, cur, "#ffd000", true);
-    // Vòng đỏ ở ĐIỂM ĐẦU của vùng đang vẽ (≥3 điểm) → nhắc "bấm vào đây để đóng".
-    if(mode==="zone" && cur.length>=3){{
+    shapes.forEach(s=> poly(s.pts, s.type==="line"?"#00e0e0":"#00ff66", s.type==="zone"));
+    if(cur.length) poly(cur, "#ffd000", false);
+    if(cur.length>=3){{                          // vòng đỏ ở điểm đầu = "bấm đây để đóng vùng"
       ctx.strokeStyle="#ff3b3b"; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.arc(cur[0][0], cur[0][1], 10, 0, 7); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cur[0][0], cur[0][1], 11, 0, 7); ctx.stroke();
     }}
-    updateOut();
+    updateHint(); updateOut();
+  }}
+  function updateHint(){{
+    let tip = "Đã bấm " + cur.length + " điểm  ·  " + shapes.length + " hình đã chốt";
+    if(cur.length>=3) tip += "  →  bấm ĐIỂM ĐẦU (đỏ) / bấm đúp / nút Xong VÙNG";
+    else if(cur.length===2) tip += "  →  bấm nút Xong VẠCH (hoặc thêm điểm cho VÙNG)";
+    else tip += "  →  bấm ≥3 điểm cho VÙNG, hoặc 2 điểm cho VẠCH";
+    hint.textContent = tip;
   }}
   function updateOut(){{
     let nL=0,nZ=0; const rows=["# ==== VẠCH / VÙNG bạn vẽ (toạ độ %) ===="];
@@ -167,8 +151,8 @@ _TEMPLATE = r"""
       else {{ nZ++;
         rows.push("Z"+nZ+"  --zone \""+P.map(p=>p.join(",")).join(";")+"\""); }}
     }});
-    if(cur.length){{ rows.push("(đang vẽ "+(mode==="line"?"vạch":"vùng")+", "+cur.length
-        +" điểm: "+cur.map(pct).map(p=>p.join(",")).join(" ; ")+")"); }}
+    if(cur.length){{ rows.push("(đang vẽ, "+cur.length+" điểm: "
+        +cur.map(pct).map(p=>p.join(",")).join(" ; ")+")"); }}
     const zs=shapes.filter(s=>s.type==="zone");
     if(zs.length){{
       rows.push(""); rows.push("# Dán cho Claude (zone_points_pct):");
@@ -181,29 +165,16 @@ _TEMPLATE = r"""
   canvas.addEventListener("click", ev=>{{
     const r=canvas.getBoundingClientRect();
     const x=(ev.clientX-r.left)/r.width*W, y=(ev.clientY-r.top)/r.height*H;
-    // Bấm GẦN điểm đầu (khi vùng đã ≥3 điểm) = ĐÓNG vùng (cử chỉ tự nhiên).
-    if(mode==="zone" && cur.length>=3 && dist([x,y], cur[0]) < 12*(W/r.width)){{
-      closeZone(); return;
-    }}
+    // Bấm GẦN điểm đầu (khi ≥3 điểm) = ĐÓNG VÙNG (cử chỉ tự nhiên, ngưỡng ~16px hiển thị).
+    if(cur.length>=3 && dist([x,y], cur[0]) < 16*(W/r.width)){{ finishZone(); return; }}
     cur.push([Math.round(x),Math.round(y)]);
-    if(mode==="line" && cur.length===2){{ shapes.push({{type:"line", pts:cur.slice()}}); cur=[]; }}
     redraw();
   }});
-  // Bấm ĐÚP = đóng vùng (bỏ 1 điểm thừa mà cú click thứ 2 vừa thêm).
-  canvas.addEventListener("dblclick", ()=>{{
-    if(mode==="zone"){{ if(cur.length>=4) cur.pop(); closeZone(); }}
-  }});
+  canvas.addEventListener("dblclick", ()=>{{ if(cur.length>=4) cur.pop(); finishZone(); }});
 
-  bLine.onclick=()=>setMode("line");
-  bZone.onclick=()=>setMode("zone");
-  document.getElementById("close-{uid}").onclick=()=>{{
-    if(closeZone()) return;                       // KHÔNG phụ thuộc chế độ nữa
-    if(cur.length>0) alert("Vùng cần ≥3 điểm — mới bấm "+cur.length+" điểm. Bấm thêm rồi Đóng vùng.");
-    else alert("Chưa bấm điểm nào. Chọn ⬠ Vùng, bấm ≥3 điểm trên ảnh, rồi Đóng vùng.");
-  }};
-  document.getElementById("undo-{uid}").onclick=()=>{{
-    if(cur.length) cur.pop(); else if(shapes.length) shapes.pop(); redraw();
-  }};
+  document.getElementById("fzone-{uid}").onclick=()=>{{ if(!finishZone()) alert("VÙNG cần ≥3 điểm — bạn mới bấm "+cur.length+" điểm. Bấm thêm rồi Xong VÙNG."); }};
+  document.getElementById("fline-{uid}").onclick=()=>{{ if(!finishLine()) alert("VẠCH cần 2 điểm — bạn mới bấm "+cur.length+" điểm."); }};
+  document.getElementById("undo-{uid}").onclick=()=>{{ if(cur.length) cur.pop(); else if(shapes.length) shapes.pop(); redraw(); }};
   document.getElementById("clear-{uid}").onclick=()=>{{ shapes=[]; cur=[]; redraw(); }};
   document.getElementById("copy-{uid}").onclick=()=>{{
     out.select();
@@ -212,7 +183,7 @@ _TEMPLATE = r"""
   }};
 
   img.onload=redraw; img.onerror=redraw; img.src="{uri}";
-  setMode("zone");
+  redraw();
 }})();
 </script>
 """
