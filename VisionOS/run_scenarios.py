@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace as replace_sc
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -102,6 +103,28 @@ def _safe_name(s: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in s)[:60]
 
 
+def _draw_scenario_geom(frame, sc):
+    """Vẽ VẠCH (vàng) hoặc VÙNG (xanh mờ) của scenario lên frame — để xem đặt đúng chưa."""
+    import cv2
+    import numpy as np
+
+    h, w = frame.shape[:2]
+    if sc.counting_type == "zone":
+        pts = np.array([[int(x), int(y)] for x, y in sc.build_zone().to_pixels(w, h)], dtype=np.int32)
+        ov = frame.copy()
+        cv2.fillPoly(ov, [pts], (0, 170, 0))
+        cv2.addWeighted(ov, 0.3, frame, 0.7, 0, frame)
+        cv2.polylines(frame, [pts], True, (0, 255, 0), 3)
+        cv2.putText(frame, "VUNG", (pts[0][0] + 4, pts[0][1] + 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    else:
+        (sx, sy), (ex, ey) = sc.build_line().endpoints(w, h)
+        cv2.line(frame, (int(sx), int(sy)), (int(ex), int(ey)), (0, 255, 255), 3)
+        cv2.putText(frame, "VACH", (int(sx) + 6, 34),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+    return frame
+
+
 def run(args) -> int:
     scenarios = by_task(None if args.task == "all" else args.task)
     if args.only:
@@ -111,6 +134,65 @@ def run(args) -> int:
     if not scenarios:
         print(f"⚠️  Không có kịch bản khớp (task={args.task!r}, only={args.only!r}).")
         return 1
+
+    # Parse ép vạch/vùng (theo %). --line "x1,y1,x2,y2" · --zone "x1,y1;x2,y2;..."
+    _line_pts = _zone_pts = None
+    if args.line:
+        try:
+            _line_pts = [float(t) for t in args.line.split(",")]
+            assert len(_line_pts) == 4
+        except Exception:
+            print("⚠️  --line phải là 'x1,y1,x2,y2' theo % (0-100). Bỏ qua.")
+            _line_pts = None
+    if args.zone and not _line_pts:
+        try:
+            _zone_pts = tuple(tuple(float(c) for c in p.split(",")) for p in args.zone.split(";"))
+            assert len(_zone_pts) >= 3 and all(len(p) == 2 for p in _zone_pts)
+        except Exception:
+            print("⚠️  --zone phải là 'x1,y1;x2,y2;...' (≥3 đỉnh, %). Bỏ qua.")
+            _zone_pts = None
+
+    def _apply_geom(sc):
+        if _line_pts:
+            return replace_sc(sc, counting_type="line",
+                              line_start_pct=(_line_pts[0], _line_pts[1]),
+                              line_end_pct=(_line_pts[2], _line_pts[3]))
+        if _zone_pts:
+            return replace_sc(sc, counting_type="zone", zone_points_pct=_zone_pts)
+        return sc
+
+    if args.preview is not None:
+        # Vẽ vạch/vùng lên FRAME ĐẦU của mỗi video (KHÔNG cần model) → xem đặt đúng chưa.
+        import cv2
+
+        outdir = args.preview or "geom_preview"
+        os.makedirs(outdir, exist_ok=True)
+        seen = set()
+        for v in scenarios:
+            if v.filename in seen:
+                continue
+            seen.add(v.filename)
+            try:
+                path = download_video(v)
+            except Exception as e:  # noqa: BLE001
+                print(f"  ❌ {v.filename}: {e}")
+                continue
+            cap = cv2.VideoCapture(path)
+            ok, fr = cap.read()
+            cap.release()
+            if not ok:
+                print(f"  ❌ không đọc được frame: {v.filename}")
+                continue
+            sc = _apply_geom(v.scenario)
+            fr = cv2.resize(fr, tuple(sc.resolution))
+            _draw_scenario_geom(fr, sc)
+            out = os.path.join(outdir, f"{v.task}_{sc.key}.jpg")
+            cv2.imwrite(out, fr)
+            geom = (f"vạch {sc.line_start_pct}->{sc.line_end_pct}" if sc.counting_type == "line"
+                    else f"vùng {sc.zone_points_pct}")
+            print(f"  🖼️  {out}   ({geom})")
+        print(f"\nXem ảnh trong {outdir}/ để chỉnh --line/--zone cho khớp rồi mới chạy đếm.")
+        return 0
 
     if args.download_only:
         # CHỈ tải video + báo ✅/❌ (không nạp model) — kiểm tra nhanh nguồn nào chạy.
@@ -155,8 +237,6 @@ def run(args) -> int:
                 print(f"    mẹo   : {v.tips}")
             print()
         return 0
-
-    from dataclasses import replace
 
     from recognition.detectors import load_locate_anything, load_standard_detector
     from recognition.video_catalog import suite_for
@@ -216,7 +296,8 @@ def run(args) -> int:
             qpairs = [("", v.scenario.prompt)]
 
         for group, q in qpairs:
-            sc = replace(v.scenario, prompt=q)
+            # ÉP vạch/vùng theo tay (bạn xem video rồi đặt cho khớp hướng vật chạy).
+            sc = _apply_geom(replace_sc(v.scenario, prompt=q))
             detector = get_detector(sc.model)
             pipe = CountingPipeline(detector, sc)
 
@@ -289,8 +370,15 @@ def main() -> int:
     ap.add_argument("--confidence", type=float, default=0.35)
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
     ap.add_argument("--only", default=None, help="lọc video theo từ khoá (tên/file/key), vd 'milk'")
+    ap.add_argument("--line", default=None,
+                    help="ÉP vạch đếm: 'x1,y1,x2,y2' theo %% (0-100). VD dọc lệch trái: '35,0,35,100'")
+    ap.add_argument("--zone", default=None,
+                    help="ÉP vùng đếm: 'x1,y1;x2,y2;x3,y3;...' theo %% (≥3 đỉnh). Xem video rồi khoanh")
     ap.add_argument("--download-only", action="store_true",
                     help="CHỈ tải video + báo ✅/❌ (không nạp model) — kiểm tra nguồn nào chạy")
+    ap.add_argument("--preview", nargs="?", const="geom_preview", default=None,
+                    help="VẼ vạch/vùng lên FRAME ĐẦU của mỗi video (không cần model) → xem đặt "
+                         "đúng chưa. Kèm --line/--zone để thử vị trí. VD: --preview /kaggle/working/prev")
     ap.add_argument("--save-dir", default=None,
                     help="LƯU VIDEO OUTPUT (vẽ vạch/vùng + box + số đếm) vào thư mục này")
     ap.add_argument("--list", action="store_true", help="chỉ liệt kê catalog, không tải/chạy")
