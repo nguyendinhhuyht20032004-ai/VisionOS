@@ -316,8 +316,12 @@ class LocateAnythingDetector:
         # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
         # kwargs có thể không được nhận ở bản generate này → thử rồi rút gọn dần.
         base_full = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True, generation_mode="hybrid", repetition_penalty=1.2)
+        # Fallback VẪN GIỮ repetition_penalty (chống bùng nổ box lặp) — chỉ bỏ
+        # generation_mode nếu bản generate không nhận. Bỏ hẳn penalty là nguyên nhân
+        # 168 box/frame → tracker loạn → IN/OUT=0.
+        base_rep = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True, repetition_penalty=1.2)
         base_simple = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True)
-        attempts = [ base_full, base_simple ]
+        attempts = [ base_full, base_rep, base_simple ]
         output, last_err = None, None
         with torch.no_grad():
             for kw in attempts:
