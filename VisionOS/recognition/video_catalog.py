@@ -28,13 +28,19 @@ __all__ = [
 
 RB_CDN = "https://media.roboflow.com/supervision/video-examples/"
 PEXELS_CDN = "https://videos.pexels.com/video-files/"
+# Endpoint tải CHÍNH THỨC của Pexels: trả file res cao nhất, KHÔNG cần đoán hậu tố
+# → cách tin cậy nhất cho MỌI video ID (dò hậu tố bên dưới chỉ là dự phòng).
+PEXELS_DL = "https://www.pexels.com/download/video/{id}/"
 
 _PEXELS_QUALITIES = (
-    "hd_1920_1080_30fps", "hd_1920_1080_25fps", "hd_1920_1080_24fps",
-    "hd_1280_720_30fps", "hd_1280_720_25fps",
-    "sd_960_540_30fps", "sd_640_360_30fps", "sd_640_360_25fps", "sd_640_360_24fps",
-    "uhd_2560_1440_30fps", "uhd_2560_1440_25fps",
+    "hd_1920_1080_30fps", "hd_1920_1080_25fps", "hd_1920_1080_24fps", "hd_1920_1080_60fps",
+    "hd_1280_720_30fps", "hd_1280_720_25fps", "hd_1280_720_24fps", "hd_1280_720_60fps",
+    "sd_960_540_30fps", "sd_960_540_25fps",
+    "sd_640_360_30fps", "sd_640_360_25fps", "sd_640_360_24fps",
+    "uhd_2560_1440_30fps", "uhd_2560_1440_25fps", "uhd_2560_1440_24fps",
     "uhd_3840_2160_30fps", "uhd_3840_2160_25fps", "uhd_3840_2160_24fps",
+    # dạng dọc (một số clip công nghiệp quay dọc)
+    "hd_1080_1920_30fps", "uhd_1440_2560_30fps",
 )
 
 
@@ -124,13 +130,26 @@ _CONVEYOR = [
         queries=("bottle", "plastic bottle", "milk bottle", "bottle cap",
                  "a bottle without a cap", "a fallen bottle"),
         tips="'bottle' chạy YOLO nhanh; query khó cần --model locate."),
-    VideoScenario("Kiện hàng trên chuyền (Pexels 4156510)", "conveyor",
+    # ƯU TIÊN video NHIỀU SẢN PHẨM chạy trên chuyền (theo yêu cầu):
+    VideoScenario("Kiện hàng chạy trên chuyền (Pexels 4156510)", "conveyor",
         _conv("conv_pkg", "Đếm kiện hàng", "cardboard box on a conveyor belt", "LocateAnything-3B"),
-        "Pexels · 'packages moving on a conveyor belt'", "conveyor_packages_4156510.mp4",
-        pexels_id="4156510",
+        "Pexels · 'packages moving on a conveyor belt' — NHIỀU thùng chạy liên tục",
+        "conveyor_packages_4156510.mp4", pexels_id="4156510",
         queries=("cardboard box", "package", "a sealed box", "a brown box",
                  "a damaged package", "the largest box"),
         tips="Bài 'đếm sản phẩm' điển hình — thùng carton KHÔNG thuộc COCO."),
+    VideoScenario("Hệ thống chuyền đang chạy (Pexels 35069357)", "conveyor",
+        _conv("conv_action", "Đếm vật trên chuyền", "an item on the conveyor belt", "LocateAnything-3B"),
+        "Pexels · 'industrial conveyor system in action' — nhiều vật chạy",
+        "conveyor_action_35069357.mp4", pexels_id="35069357",
+        queries=("an item on the conveyor belt", "a product", "a box", "a package",
+                 "the item closest to the camera")),
+    VideoScenario("Dây chuyền nhà máy rộng (Pexels 30715848)", "conveyor",
+        _conv("conv_line", "Đếm sản phẩm dây chuyền", "product on the production line", "LocateAnything-3B"),
+        "Pexels · 'wide view of modern factory production line' — góc rộng nhiều sản phẩm",
+        "conveyor_line_30715848.mp4", pexels_id="30715848",
+        queries=("product on the production line", "finished product",
+                 "an item being assembled", "a bottle", "a box")),
     VideoScenario("Băng chuyền nhà máy (Pexels 4473250)", "conveyor",
         _conv("conv_fac", "Đếm vật trên chuyền", "item on the conveyor belt", "LocateAnything-3B"),
         "Pexels · 'factory conveyor belt'", "conveyor_factory_4473250.mp4",
@@ -141,16 +160,6 @@ _CONVEYOR = [
         "Pexels · 'black conveyor belt' cận cảnh", "conveyor_black_4473187.mp4",
         pexels_id="4473187",
         queries=("object on the belt", "product", "a dark colored item")),
-    VideoScenario("Dây chuyền hiện đại (Pexels 30715848)", "conveyor",
-        _conv("conv_line", "Đếm sản phẩm dây chuyền", "product on the production line", "LocateAnything-3B"),
-        "Pexels · 'wide view of modern factory production line'", "conveyor_line_30715848.mp4",
-        pexels_id="30715848",
-        queries=("product on the production line", "finished product", "an item being assembled")),
-    VideoScenario("Đóng gói sản phẩm (Pexels 4480985)", "conveyor",
-        _conv("conv_pack2", "Đếm sản phẩm đóng gói", "product being packaged", "LocateAnything-3B"),
-        "Pexels · dây chuyền đóng gói (tiêu đề: packaging)", "conveyor_packaging_4480985.mp4",
-        pexels_id="4480985",
-        queries=("packaged product", "a bottle", "a box", "an item on the line")),
 ]
 
 # --------------------------------------------------------------------------- #
@@ -258,18 +267,23 @@ def by_task(task: Optional[str] = None) -> List[VideoScenario]:
 
 
 def _fetch(url: str, dest: str, min_bytes: int = 200_000) -> bool:
+    """Tải url → dest. True nếu ra file video hợp lệ (>min_bytes, không phải HTML)."""
     import urllib.request
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=90) as r, open(dest, "wb") as f:
+        with urllib.request.urlopen(req, timeout=90) as r:
             if getattr(r, "status", 200) != 200:
                 return False
-            while True:
-                chunk = r.read(1 << 20)
-                if not chunk:
-                    break
-                f.write(chunk)
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            if "text/html" in ctype or "application/json" in ctype:
+                return False  # trang lỗi/redirect HTML, KHÔNG phải video
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
     except Exception:
         if os.path.exists(dest):
             os.remove(dest)
@@ -308,11 +322,17 @@ def download_video(vs: VideoScenario, dest_dir: str = "videos") -> str:
         return dest
 
     if vs.pexels_id:
+        # (a) endpoint tải CHÍNH THỨC — không cần đoán hậu tố, hợp mọi độ phân giải.
+        if _fetch(PEXELS_DL.format(id=vs.pexels_id), dest):
+            print(f"  ✅ tải qua endpoint chính thức (id={vs.pexels_id})")
+            return dest
+        # (b) dò hậu tố trực tiếp (dự phòng).
         for q in _PEXELS_QUALITIES:
-            url = f"{PEXELS_CDN}{vs.pexels_id}/{vs.pexels_id}-{q}.mp4"
-            if _fetch(url, dest):
+            if _fetch(f"{PEXELS_CDN}{vs.pexels_id}/{vs.pexels_id}-{q}.mp4", dest):
+                print(f"  ✅ tải qua hậu tố {q} (id={vs.pexels_id})")
                 return dest
 
     raise RuntimeError(
-        f"Không tải được '{vs.name}'. Kiểm tra mạng/nguồn, hoặc tải tay đặt vào {dest!r}."
+        f"Không tải được '{vs.name}' (id={vs.pexels_id or vs.url}). "
+        f"Kiểm tra Internet, hoặc tải TAY đặt vào {dest!r}."
     )

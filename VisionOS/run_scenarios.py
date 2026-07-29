@@ -112,6 +112,25 @@ def run(args) -> int:
         print(f"⚠️  Không có kịch bản khớp (task={args.task!r}, only={args.only!r}).")
         return 1
 
+    if args.download_only:
+        # CHỈ tải video + báo ✅/❌ (không nạp model) — kiểm tra nhanh nguồn nào chạy.
+        ok = fail = 0
+        seen = set()
+        for v in scenarios:
+            if v.filename in seen:
+                continue
+            seen.add(v.filename)
+            try:
+                path = download_video(v)
+                sz = os.path.getsize(path) / 1e6
+                print(f"  ✅ {v.filename:38} {sz:6.1f} MB  [{v.task}]")
+                ok += 1
+            except Exception as e:  # noqa: BLE001
+                print(f"  ❌ {v.filename:38} — {e}")
+                fail += 1
+        print(f"\nKết quả tải: ✅ {ok}  ❌ {fail}. (Video ❌ báo tôi ID để tôi đổi nguồn.)")
+        return 0 if fail == 0 else 1
+
     if args.list:
         print(f"📚 CATALOG VIDEO ({len(scenarios)}) — tải trực tiếp, không cần API key\n")
         for v in scenarios:
@@ -270,6 +289,8 @@ def main() -> int:
     ap.add_argument("--confidence", type=float, default=0.35)
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
     ap.add_argument("--only", default=None, help="lọc video theo từ khoá (tên/file/key), vd 'milk'")
+    ap.add_argument("--download-only", action="store_true",
+                    help="CHỈ tải video + báo ✅/❌ (không nạp model) — kiểm tra nguồn nào chạy")
     ap.add_argument("--save-dir", default=None,
                     help="LƯU VIDEO OUTPUT (vẽ vạch/vùng + box + số đếm) vào thư mục này")
     ap.add_argument("--list", action="store_true", help="chỉ liệt kê catalog, không tải/chạy")
