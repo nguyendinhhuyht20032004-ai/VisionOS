@@ -217,6 +217,12 @@ Copy toạ độ ra rồi chạy `--zone/--line`, hoặc gửi lại để đưa
 thành 1 `VideoScenario` riêng — như `market-square` đang có cả bài VẠCH lẫn bài VÙNG
 trên cùng 1 video, scorecard in mỗi vùng 1 dòng).
 
+> ⏳ **Bài open-vocab tải model ~6GB, lần đầu 3–8 phút.** `run_scenarios.py` giờ nạp
+> model NGAY tại một mốc in rõ ("🧠 Nạp LocateAnything-3B …") thay vì nạp lười giữa
+> vòng đếm (trước đây trông như treo → dễ bị bấm Stop). `KeyboardInterrupt` trong lúc
+> tải = **bị ngắt giữa chừng, KHÔNG phải lỗi code** — chạy lại và chờ. Trên Kaggle nên
+> chạy cell "⏳ Tải model 3B TRƯỚC" một lần để kéo model về cache trước khi đếm.
+
 `--suite` chạy `QUERY_SUITES` (trong `recognition/video_catalog.py`) — mỗi bài toán
 có **20–30+ query phân nhóm**: cơ bản · màu/trang phục · phụ kiện · hành động/quan hệ ·
 đếm/nhóm · khó/phủ định · **tiếng Việt** (kiểm tra đa ngữ). Scorecard thêm cột **nhóm**.

@@ -329,11 +329,22 @@ def run(args) -> int:
     _cache: dict = {}
 
     def get_detector(model_field: str):
+        import time as _time
+
         kind = "locate" if _wants_locate(model_field) else "yolo"
         if kind not in _cache:
             if kind == "locate":
-                print("🧠 Nạp LocateAnything-3B …")
-                _cache[kind] = load_locate_anything()
+                # NẠP NGAY tại đây (không để lười tới frame đầu). Load 3B ~6GB lần đầu
+                # mất vài phút — nếu để nó chạy GIỮA vòng đếm sẽ TRÔNG như treo, dễ bị
+                # bấm Stop → KeyboardInterrupt (KHÔNG phải lỗi code). In mốc rõ ràng.
+                print("🧠 Nạp LocateAnything-3B (mô hình ~6GB) …")
+                print("   ⏳ LẦN ĐẦU tải + nạp mất 3–8 phút (kéo ~6GB từ HuggingFace) — ĐỪNG bấm Stop.")
+                print("   ℹ️  Nếu thấy 'KeyboardInterrupt' nghĩa là đã NGẮT giữa chừng, không phải bug.")
+                det = load_locate_anything()
+                t0 = _time.time()
+                det.load()                       # tải + nạp NGAY, có mốc thời gian
+                print(f"   ✅ Model sẵn sàng sau {_time.time() - t0:.0f}s — bắt đầu đếm.")
+                _cache[kind] = det
             else:
                 print("🎯 Nạp YOLO …")
                 _cache[kind] = load_standard_detector(backend=args.yolo_backend, confidence=args.confidence)
