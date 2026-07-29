@@ -63,17 +63,27 @@ def _frames_of(path, resolution):
 
 def run(args) -> int:
     scenarios = by_task(None if args.task == "all" else args.task)
+    if args.only:
+        kw = args.only.lower()
+        scenarios = [v for v in scenarios
+                     if kw in v.name.lower() or kw in v.filename.lower() or kw in v.scenario.key.lower()]
     if not scenarios:
-        print(f"⚠️  Không có kịch bản cho task={args.task!r}. Dùng: vehicles|conveyor|people|all")
+        print(f"⚠️  Không có kịch bản khớp (task={args.task!r}, only={args.only!r}).")
         return 1
 
     if args.list:
-        print("📚 CATALOG VIDEO (tải trực tiếp, không cần API key)\n")
+        print(f"📚 CATALOG VIDEO ({len(scenarios)}) — tải trực tiếp, không cần API key\n")
         for v in scenarios:
             s = v.scenario
+            if v.asset:
+                src = f"supervision:{v.asset}"
+            elif v.url:
+                src = v.url
+            else:
+                src = f"pexels:{v.pexels_id} (tự dò chất lượng)"
             print(f"• [{v.task}] {v.name}")
             print(f"    nguồn : {v.source}")
-            print(f"    url   : {v.url}")
+            print(f"    tải   : {src}")
             print(f"    vạch  : {s.line_start_pct}→{s.line_end_pct}  prompt={s.prompt!r}  model={s.model}")
             if v.tips:
                 print(f"    mẹo   : {v.tips}")
@@ -82,11 +92,23 @@ def run(args) -> int:
 
     from recognition.detectors import load_locate_anything, load_standard_detector
 
+    def _wants_locate(model_field: str) -> bool:
+        return args.model == "locate" or (args.model == "auto" and not model_field.startswith("YOLO"))
+
+    # Nếu SẼ dùng LocateAnything (vd đếm thùng carton trên chuyền), đảm bảo
+    # transformers==4.57.1 TRƯỚC khi nạp model (giống run_eval) — có thể re-exec.
+    if any(_wants_locate(v.scenario.model) for v in scenarios):
+        try:
+            from run_eval import _autopin_transformers
+
+            _autopin_transformers()
+        except Exception as e:  # noqa: BLE001
+            print(f"ℹ️  bỏ qua auto-pin transformers ({e})")
+
     _cache: dict = {}
 
     def get_detector(model_field: str):
-        want_locate = args.model == "locate" or (args.model == "auto" and not model_field.startswith("YOLO"))
-        kind = "locate" if want_locate else "yolo"
+        kind = "locate" if _wants_locate(model_field) else "yolo"
         if kind not in _cache:
             if kind == "locate":
                 print("🧠 Nạp LocateAnything-3B …")
@@ -138,6 +160,7 @@ def main() -> int:
     ap.add_argument("--max-frames", type=int, default=300)
     ap.add_argument("--confidence", type=float, default=0.35)
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
+    ap.add_argument("--only", default=None, help="lọc video theo từ khoá (tên/file/key), vd 'milk'")
     ap.add_argument("--list", action="store_true", help="chỉ liệt kê catalog, không tải/chạy")
     args = ap.parse_args()
     return run(args)
