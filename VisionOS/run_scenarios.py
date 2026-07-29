@@ -61,6 +61,47 @@ def _frames_of(path, resolution):
         cap.release()
 
 
+def _draw_overlay(frame, tracked, pipe):
+    """Vẽ VẠCH/VÙNG + box + track-id + số đếm lên frame (để lưu video kiểm tra)."""
+    import cv2
+    import numpy as np
+
+    img = frame
+    w, h = pipe.w, pipe.h
+    GREEN, YELLOW, CYAN, WHITE = (0, 200, 0), (0, 255, 255), (255, 255, 0), (255, 255, 255)
+
+    # Vạch cắt (line) — vàng, dày.
+    if pipe.line is not None:
+        (sx, sy), (ex, ey) = pipe.line.endpoints(w, h)
+        cv2.line(img, (int(sx), int(sy)), (int(ex), int(ey)), YELLOW, 3)
+    # Vùng (zone) — tô xanh mờ + viền.
+    if pipe.zone is not None:
+        pts = np.array([[int(x), int(y)] for x, y in pipe.zone.to_pixels(w, h)], dtype=np.int32)
+        ov = img.copy()
+        cv2.fillPoly(ov, [pts], (0, 170, 0))
+        cv2.addWeighted(ov, 0.25, img, 0.75, 0, img)
+        cv2.polylines(img, [pts], True, GREEN, 2)
+    # Box + track id
+    for d in tracked:
+        x1, y1, x2, y2 = (int(v) for v in d.bbox.as_xyxy())
+        cv2.rectangle(img, (x1, y1), (x2, y2), CYAN, 2)
+        tid = d.track_id if d.track_id is not None else "?"
+        cv2.putText(img, f"#{tid}", (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, CYAN, 1)
+    # Banner số đếm
+    r = pipe.result
+    if pipe.line is not None:
+        txt = f"{pipe.scenario.in_label}:{r.in_count}  {pipe.scenario.out_label}:{r.out_count}  frame:{r.frames}"
+    else:
+        txt = f"trong vung:{r.zone_current}  dinh:{r.zone_peak}  frame:{r.frames}"
+    cv2.rectangle(img, (0, 0), (w, 28), (0, 0, 0), -1)
+    cv2.putText(img, txt, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, WHITE, 2)
+    return img
+
+
+def _safe_name(s: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in s)[:60]
+
+
 def run(args) -> int:
     scenarios = by_task(None if args.task == "all" else args.task)
     if args.only:
@@ -84,7 +125,11 @@ def run(args) -> int:
             print(f"• [{v.task}] {v.name}")
             print(f"    nguồn : {v.source}")
             print(f"    tải   : {src}")
-            print(f"    vạch  : {s.line_start_pct}→{s.line_end_pct}  prompt={s.prompt!r}  model={s.model}")
+            if s.counting_type == "zone":
+                geom = f"vùng  : {len(s.zone_points_pct)} đỉnh {s.zone_points_pct}"
+            else:
+                geom = f"vạch  : {s.line_start_pct}→{s.line_end_pct}"
+            print(f"    {geom}  prompt={s.prompt!r}  model={s.model}")
             if v.queries:
                 print(f"    query : {' | '.join(v.queries)}")
             if v.tips:
@@ -151,16 +196,51 @@ def run(args) -> int:
             sc = replace(v.scenario, prompt=q)
             detector = get_detector(sc.model)
             pipe = CountingPipeline(detector, sc)
-            pipe.run(_frames_of(path, sc.resolution), max_frames=args.max_frames)
-            r = pipe.result.as_row()
-            row = {"video": v.name, "task": v.task, "query": q, **r}
-            row["verdict"] = "✅" if (r.get("det/frame", 0) > 0 and r.get("total", 0) >= sc.expect_min) else "⚠️"
-            rows.append(row)
-            print(f"  · query={q!r} → IN={r.get('IN')} OUT={r.get('OUT')} "
-                  f"total={r.get('total')} det/frame={r.get('det/frame')} fps={r.get('fps')}")
 
-    print(f"\n{'='*70}\n📊 SCORECARD — đếm trên video thật (IoU tracking + cắt vạch)\n{'='*70}")
-    print_scorecard(rows)
+            # Lưu video output (vẽ vạch/vùng + box + số đếm) nếu có --save-dir.
+            writer, out_path, on_frame = None, None, None
+            if args.save_dir:
+                import cv2
+
+                task_dir = os.path.join(args.save_dir, v.task)
+                os.makedirs(task_dir, exist_ok=True)
+                out_path = os.path.join(task_dir, f"{sc.key}__{_safe_name(q)}.mp4")
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(out_path, fourcc, 20.0, tuple(sc.resolution))
+
+                def on_frame(frame, tracked, pipe, _w=writer):
+                    _w.write(_draw_overlay(frame, tracked, pipe))
+
+            pipe.run(_frames_of(path, sc.resolution), max_frames=args.max_frames, on_frame=on_frame)
+            if writer is not None:
+                writer.release()
+                print(f"  🎥 lưu video: {out_path}")
+
+            r = pipe.result.as_row()
+            row = {"video": v.name, "task": v.task, "query": q, "type": sc.counting_type, **r}
+            ok = (r.get("det/frame", 0) > 0
+                  and (r.get("total", r.get("đỉnh_vùng", 0)) >= sc.expect_min))
+            row["verdict"] = "✅" if ok else "⚠️"
+            rows.append(row)
+            if sc.counting_type == "line":
+                print(f"  · query={q!r} → IN={r.get('IN')} OUT={r.get('OUT')} "
+                      f"total={r.get('total')} det/frame={r.get('det/frame')} fps={r.get('fps')}")
+            else:
+                print(f"  · query={q!r} → trong_vùng={r.get('trong_vùng')} đỉnh={r.get('đỉnh_vùng')} "
+                      f"det/frame={r.get('det/frame')} fps={r.get('fps')}")
+
+    # Tách scorecard theo kiểu đếm (line/zone khác cột) cho gọn.
+    line_rows = [r for r in rows if r.get("type") == "line"]
+    zone_rows = [r for r in rows if r.get("type") == "zone"]
+    print(f"\n{'='*70}\n📊 SCORECARD — đếm trên video thật\n{'='*70}")
+    if line_rows:
+        print("\n▶ Đếm cắt VẠCH (vào/ra):")
+        print_scorecard([{k: v for k, v in r.items() if k != "type"} for r in line_rows])
+    if zone_rows:
+        print("\n▶ Đếm trong VÙNG (occupancy):")
+        print_scorecard([{k: v for k, v in r.items() if k != "type"} for r in zone_rows])
+    if args.save_dir:
+        print(f"\n🎥 Video output đã lưu trong: {args.save_dir}/<task>/")
     return 0
 
 
@@ -179,6 +259,8 @@ def main() -> int:
     ap.add_argument("--confidence", type=float, default=0.35)
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
     ap.add_argument("--only", default=None, help="lọc video theo từ khoá (tên/file/key), vd 'milk'")
+    ap.add_argument("--save-dir", default=None,
+                    help="LƯU VIDEO OUTPUT (vẽ vạch/vùng + box + số đếm) vào thư mục này")
     ap.add_argument("--list", action="store_true", help="chỉ liệt kê catalog, không tải/chạy")
     args = ap.parse_args()
     return run(args)

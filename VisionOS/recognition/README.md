@@ -178,10 +178,17 @@ python run_scenarios.py --list                       # video + query gợi ý
 python run_scenarios.py --task vehicles              # đếm xe (YOLO, nhanh)
 python run_scenarios.py --task conveyor --only milk  # đếm chai (YOLO, nhanh)
 
+# LƯU VIDEO OUTPUT (vẽ vạch/vùng + box + track-id + số đếm) để soi mắt thường:
+python run_scenarios.py --task people --save-dir out_videos
+
 # ĐẾM SẢN PHẨM với QUERY KHÓ (open-vocab) — test nhiều prompt trên mỗi video:
 python run_scenarios.py --task conveyor --all-queries          # query gợi ý sẵn
 python run_scenarios.py --task conveyor --queries "cardboard box,a damaged package"
 ```
+
+Bài **NGƯỜI** tách 2 kiểu đếm (scorecard in riêng): **cắt VẠCH** (vào/ra) và
+**đếm VÙNG** (occupancy — hợp cảnh người đi lại lộn xộn như quảng trường). Video
+output tô: **vàng = vạch**, **xanh mờ = vùng**, **xanh dương = box + #track-id**.
 
 Nhãn video được kiểm chứng theo nội dung thật (supervision đặt tên theo nội dung;
 Pexels theo tiêu đề trang). Video sai nhãn từng gặp (nước chảy / giao thông bị gán

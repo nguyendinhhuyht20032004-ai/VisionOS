@@ -64,11 +64,11 @@ def test_urls_are_from_trusted_cdns():
             assert v.url.startswith(PEXELS_CDN) and v.url.endswith(".mp4")
 
 
-def test_every_scenario_valid_and_line():
+def test_every_scenario_valid():
     for v in CATALOG:
         assert isinstance(v.scenario, CountScenario)
         v.scenario.validate()
-        assert v.scenario.counting_type == "line"
+        assert v.scenario.counting_type in ("line", "zone")
         assert v.scenario.prompt.strip()
 
 
@@ -78,10 +78,26 @@ def test_scenario_keys_unique_and_identifier():
     assert all(k.isidentifier() for k in keys)
 
 
-def test_filenames_unique_and_mp4():
-    files = [v.filename for v in CATALOG]
-    assert len(files) == len(set(files))
-    assert all(f.endswith(".mp4") for f in files)
+def test_filenames_mp4():
+    # filename có thể TRÙNG (vd market-square.mp4 dùng cho cả bài vạch lẫn vùng —
+    # tải 1 lần dùng lại); chỉ yêu cầu đuôi .mp4. Định danh duy nhất là scenario.key.
+    assert all(v.filename.endswith(".mp4") for v in CATALOG)
+
+
+def test_people_has_both_line_and_zone():
+    # user yêu cầu: tách bài đếm NGƯỜI thành cắt VẠCH (vào/ra) + đếm VÙNG (occupancy)
+    ppl = by_task("people")
+    types = {v.scenario.counting_type for v in ppl}
+    assert "line" in types and "zone" in types
+    # market-square xuất hiện ở CẢ hai kiểu
+    ms = [v for v in ppl if v.filename == "market-square.mp4"]
+    assert {v.scenario.counting_type for v in ms} == {"line", "zone"}
+
+
+def test_zone_scenarios_have_polygon():
+    for v in CATALOG:
+        if v.scenario.counting_type == "zone":
+            assert len(v.scenario.zone_points_pct) >= 3   # đủ đỉnh để tạo vùng
 
 
 def test_by_task_filter():

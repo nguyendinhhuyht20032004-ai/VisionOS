@@ -74,6 +74,17 @@ def _conv(key, title, prompt, model, res=(1280, 720)):
                "Qua vạch", "Ngược", "CENTER", res, "Hàng chạy ngang → vạch DỌC.")
 
 
+def _ppl_zone(key, title, points, res=(1280, 720)):
+    """Bài đếm NGƯỜI TRONG VÙNG (occupancy) — hợp cảnh người đi lại lộn xộn."""
+    return CountScenario(
+        key=key, title=title, usecase_id=f"uc-{key}",
+        mode=MonitoringMode.STANDARD, model="YOLO-NAS-S", prompt="person",
+        counting_type="zone", zone_points_pct=points, zone_anchor="BOTTOM_CENTER",
+        resolution=res, expect_min=0,
+        notes="Đếm số người ĐANG ở trong vùng (không cần luồng vào/ra rõ).",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 🚗 PHƯƠNG TIỆN — chỉ nguồn tin cậy (supervision + Pexels tiêu đề đúng/đã xác minh)
 # --------------------------------------------------------------------------- #
@@ -143,24 +154,37 @@ _CONVEYOR = [
 # 🚶 NGƯỜI — chỉ supervision (đặt tên theo nội dung, tin cậy)
 # --------------------------------------------------------------------------- #
 _PEOPLE = [
-    VideoScenario("Lối đi bộ top-down (supervision)", "people",
-        _ppl("ppl_walk", "Người đi bộ"), "Roboflow supervision · lối đi bộ — TIN CẬY",
+    VideoScenario("Người đi bộ — vào/ra (supervision)", "people",
+        _ppl("ppl_walk", "Đếm người vào/ra"), "Roboflow supervision · lối đi bộ — TIN CẬY",
         "people-walking.mp4", asset="PEOPLE_WALKING",
         queries=("person", "a person wearing a backpack", "a person in white",
-                 "a child", "a person carrying a bag")),
-    VideoScenario("Ga tàu điện (supervision)", "people",
-        _ppl("ppl_subway", "Người ga tàu", y=55.0), "Roboflow supervision · ga tàu, luồng 2 chiều — TIN CẬY",
+                 "a child", "a person carrying a bag"),
+        tips="Vạch NGANG giữa; xem video output rồi chỉnh y nếu luồng người ở chỗ khác."),
+    VideoScenario("Ga tàu — vào/ra (supervision)", "people",
+        _ppl("ppl_subway", "Đếm người vào/ra ga", y=50.0),
+        "Roboflow supervision · ga tàu, luồng 2 chiều — TIN CẬY",
         "subway.mp4", asset="SUBWAY",
-        queries=("person", "a person with luggage", "a person wearing a hat")),
-    VideoScenario("Siêu thị (supervision)", "people",
-        _ppl("ppl_store", "Người siêu thị"), "Roboflow supervision · lối đi siêu thị — TIN CẬY",
-        "grocery-store.mp4", asset="GROCERY_STORE",
+        queries=("person", "a person with luggage", "a person wearing a hat"),
+        tips="Người đi qua sảnh → vạch NGANG. Nếu đếm lệch, xem output & chỉnh vạch."),
+    VideoScenario("Siêu thị — vào/ra (supervision)", "people",
+        _ppl("ppl_store", "Đếm người vào/ra siêu thị"),
+        "Roboflow supervision · lối đi siêu thị — TIN CẬY", "grocery-store.mp4",
+        asset="GROCERY_STORE",
         queries=("person", "a shopper pushing a cart", "a person holding a basket")),
-    VideoScenario("Quảng trường (supervision)", "people",
-        _ppl("ppl_square", "Người quảng trường"), "Roboflow supervision · quảng trường (người đi lại nhiều hướng)",
+    # market-square: NGƯỜI ĐI LẠI nhiều hướng → tách 2 bài như user yêu cầu.
+    VideoScenario("Quảng trường — vào/ra (supervision)", "people",
+        _ppl("ppl_square_line", "Đếm người vào/ra quảng trường"),
+        "Roboflow supervision · quảng trường — bài CẮT VẠCH (vào/ra)",
         "market-square.mp4", asset="MARKET_SQUARE",
-        queries=("person", "a person walking a dog", "a group of people"),
-        tips="Người đi nhiều hướng (không rõ luồng vào/ra) → hợp đếm VÙNG hơn cắt vạch."),
+        queries=("person", "a group of people"),
+        tips="Người đi nhiều hướng → cắt vạch dễ thiếu; xem thêm bài ZONE bên dưới."),
+    VideoScenario("Quảng trường — đếm trong VÙNG (supervision)", "people",
+        _ppl_zone("ppl_square_zone", "Đếm người trong vùng",
+                  ((28.0, 32.0), (72.0, 32.0), (72.0, 85.0), (28.0, 85.0))),
+        "Roboflow supervision · quảng trường — bài ĐẾM VÙNG (occupancy)",
+        "market-square.mp4", asset="MARKET_SQUARE",
+        queries=("person", "a person standing"),
+        tips="Đếm số người đang trong vùng trung tâm; hợp cảnh đi lại lộn xộn."),
 ]
 
 CATALOG: List[VideoScenario] = [*_VEHICLES, *_CONVEYOR, *_PEOPLE]
