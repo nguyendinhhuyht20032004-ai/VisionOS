@@ -21,7 +21,10 @@ from typing import List, Optional, Tuple
 from .base import MonitoringMode
 from .scenarios import CountScenario
 
-__all__ = ["VideoScenario", "CATALOG", "by_task", "download_video", "RB_CDN", "PEXELS_CDN"]
+__all__ = [
+    "VideoScenario", "CATALOG", "by_task", "download_video",
+    "QUERY_SUITES", "suite_for", "RB_CDN", "PEXELS_CDN",
+]
 
 RB_CDN = "https://media.roboflow.com/supervision/video-examples/"
 PEXELS_CDN = "https://videos.pexels.com/video-files/"
@@ -188,6 +191,64 @@ _PEOPLE = [
 ]
 
 CATALOG: List[VideoScenario] = [*_VEHICLES, *_CONVEYOR, *_PEOPLE]
+
+
+# --------------------------------------------------------------------------- #
+# BỘ QUERY SUITE — nhiều TRƯỜNG HỢP test phân theo nhóm (như bảng Excel của user):
+# cơ bản, màu/trang phục, phụ kiện, hành động/quan hệ, đếm/nhóm, khó/phủ định,
+# và TIẾNG VIỆT (để kiểm tra khả năng đa ngữ — thường LA hiểu kém, kết quả cho
+# thấy giới hạn). Chạy: run_scenarios.py --task <t> --suite [--only <video>].
+# --------------------------------------------------------------------------- #
+QUERY_SUITES = {
+    "people": {
+        "cơ bản": ["person", "a man", "a woman", "a child", "an elderly person"],
+        "màu/trang phục": ["a person in a white shirt", "a person in a red shirt",
+                           "a person wearing black", "a person in a jacket",
+                           "a person wearing shorts"],
+        "phụ kiện": ["a person wearing a backpack", "a person carrying a handbag",
+                    "a person wearing a hat", "a person wearing a mask",
+                    "a person wearing sunglasses"],
+        "hành động/quan hệ": ["a person walking a dog", "a person riding a bicycle",
+                             "a person talking on the phone", "a person pushing a stroller",
+                             "a person running"],
+        "đếm/nhóm": ["two people walking together", "a group of people",
+                    "a person standing alone"],
+        "khó/phủ định": ["a person without a backpack", "a person not wearing a hat",
+                        "the tallest person", "a person facing the camera"],
+        "tiếng Việt": ["người đi bộ", "người đeo ba lô", "người mặc áo trắng", "người đội mũ"],
+    },
+    "vehicles": {
+        "loại xe": ["car", "truck", "bus", "motorcycle", "van", "bicycle"],
+        "màu": ["a white car", "a black car", "a red car", "a silver car"],
+        "đặc điểm": ["a large truck", "a small car", "a delivery truck", "a taxi"],
+        "hành động": ["a car turning", "a vehicle changing lanes", "a moving car",
+                     "a parked car"],
+        "khó": ["a car with its headlights on", "the vehicle closest to the camera",
+               "a vehicle carrying cargo"],
+        "tiếng Việt": ["xe ô tô", "xe tải", "xe máy", "xe buýt"],
+    },
+    "conveyor": {
+        "chai": ["bottle", "plastic bottle", "glass bottle", "milk bottle", "water bottle"],
+        "trạng thái chai": ["a bottle with a cap", "a bottle without a cap",
+                           "an empty bottle", "a full bottle", "a fallen bottle"],
+        "hộp/kiện": ["cardboard box", "a sealed box", "an open box", "a damaged box",
+                    "a brown box"],
+        "sản phẩm": ["product on the conveyor", "a packaged product", "a defective product",
+                    "an item being assembled"],
+        "đặc điểm/đếm": ["a red product", "the largest item", "the smallest item",
+                        "a shiny object"],
+        "tiếng Việt": ["chai nước", "thùng carton", "sản phẩm lỗi", "chai nhựa"],
+    },
+}
+
+
+def suite_for(task: str):
+    """Trả list (nhóm, query) của bộ suite cho một bài toán ('people'|'vehicles'|'conveyor')."""
+    out = []
+    for group, qs in QUERY_SUITES.get(task, {}).items():
+        for q in qs:
+            out.append((group, q))
+    return out
 
 
 def by_task(task: Optional[str] = None) -> List[VideoScenario]:

@@ -4,9 +4,11 @@ from recognition.scenarios import CountScenario
 from recognition.video_catalog import (
     CATALOG,
     PEXELS_CDN,
+    QUERY_SUITES,
     RB_CDN,
     VideoScenario,
     by_task,
+    suite_for,
 )
 
 
@@ -115,3 +117,33 @@ def test_conveyor_line_vertical_vehicles_horizontal():
 def test_supervision_and_pexels_both_used():
     assert any(v.asset for v in CATALOG)       # có nguồn supervision (hash-check)
     assert any(v.pexels_id or v.url for v in CATALOG)  # có nguồn Pexels
+
+
+# --------------------------------------------------------------------------- #
+# QUERY SUITES — nhiều trường hợp test phân nhóm (như bảng Excel)
+# --------------------------------------------------------------------------- #
+def test_query_suites_cover_three_tasks_and_are_rich():
+    assert {"people", "vehicles", "conveyor"} <= set(QUERY_SUITES)
+    for task in ("people", "vehicles", "conveyor"):
+        pairs = suite_for(task)
+        assert len(pairs) >= 20, f"suite {task} quá ít trường hợp"       # nhiều ca test
+        assert len({g for g, _ in pairs}) >= 5, f"suite {task} thiếu nhóm"  # nhiều nhóm
+
+
+def test_suite_has_vietnamese_and_hard_cases():
+    # bảng Excel test cả prompt tiếng Việt + trường hợp khó/phủ định
+    ppl = QUERY_SUITES["people"]
+    assert "tiếng Việt" in ppl and any("người" in q for q in ppl["tiếng Việt"])
+    assert any("khó" in g or "phủ định" in g for g in ppl)
+
+
+def test_suite_for_returns_group_query_pairs():
+    pairs = suite_for("conveyor")
+    assert all(isinstance(g, str) and isinstance(q, str) and q for g, q in pairs)
+    assert suite_for("khong-co-task") == []
+
+
+def test_total_test_cases_is_large():
+    # tổng số ca test (suite + query per-video) đủ phong phú như yêu cầu
+    total = sum(len(suite_for(t)) for t in QUERY_SUITES) + sum(len(v.queries) for v in CATALOG)
+    assert total >= 100

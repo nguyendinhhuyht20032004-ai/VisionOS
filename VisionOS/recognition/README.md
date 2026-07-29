@@ -184,7 +184,15 @@ python run_scenarios.py --task people --save-dir out_videos
 # ĐẾM SẢN PHẨM với QUERY KHÓ (open-vocab) — test nhiều prompt trên mỗi video:
 python run_scenarios.py --task conveyor --all-queries          # query gợi ý sẵn
 python run_scenarios.py --task conveyor --queries "cardboard box,a damaged package"
+
+# BỘ QUERY SUITE ĐẦY ĐỦ (nhiều trường hợp như bảng Excel) — phân theo nhóm:
+python run_scenarios.py --task conveyor --only milk --suite    # ~27 query/6 nhóm
+python run_scenarios.py --task people   --only walk --suite    # ~31 query/7 nhóm
 ```
+
+`--suite` chạy `QUERY_SUITES` (trong `recognition/video_catalog.py`) — mỗi bài toán
+có **20–30+ query phân nhóm**: cơ bản · màu/trang phục · phụ kiện · hành động/quan hệ ·
+đếm/nhóm · khó/phủ định · **tiếng Việt** (kiểm tra đa ngữ). Scorecard thêm cột **nhóm**.
 
 Bài **NGƯỜI** tách 2 kiểu đếm (scorecard in riêng): **cắt VẠCH** (vào/ra) và
 **đếm VÙNG** (occupancy — hợp cảnh người đi lại lộn xộn như quảng trường). Video

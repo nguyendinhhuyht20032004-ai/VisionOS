@@ -140,11 +140,12 @@ def run(args) -> int:
     from dataclasses import replace
 
     from recognition.detectors import load_locate_anything, load_standard_detector
+    from recognition.video_catalog import suite_for
 
     # Query khó → open-vocab (LocateAnything). Nếu test nhiều query mà chưa chỉ định
     # model thì tự chuyển sang locate (YOLO chỉ biết lớp COCO, không hiểu mô tả).
     manual_queries = [q.strip() for q in args.queries.split(",") if q.strip()] if args.queries else None
-    testing_queries = bool(manual_queries) or args.all_queries
+    testing_queries = bool(manual_queries) or args.all_queries or args.suite
     if testing_queries and args.model == "auto":
         args.model = "locate"
 
@@ -183,16 +184,19 @@ def run(args) -> int:
             continue
 
         # Chọn danh sách prompt để test trên video này (DỄ→KHÓ).
-        if manual_queries:
-            qlist = manual_queries
+        # Danh sách (nhóm, query) để test trên video này.
+        if args.suite:
+            qpairs = suite_for(v.task) or [("", v.scenario.prompt)]
+        elif manual_queries:
+            qpairs = [("", q) for q in manual_queries]
         elif args.all_queries:
-            qlist = list(v.queries) or [v.scenario.prompt]
+            qpairs = [("", q) for q in (v.queries or (v.scenario.prompt,))]
         elif args.prompt:
-            qlist = [args.prompt]
+            qpairs = [("", args.prompt)]
         else:
-            qlist = [v.scenario.prompt]
+            qpairs = [("", v.scenario.prompt)]
 
-        for q in qlist:
+        for group, q in qpairs:
             sc = replace(v.scenario, prompt=q)
             detector = get_detector(sc.model)
             pipe = CountingPipeline(detector, sc)
@@ -217,16 +221,20 @@ def run(args) -> int:
                 print(f"  🎥 lưu video: {out_path}")
 
             r = pipe.result.as_row()
-            row = {"video": v.name, "task": v.task, "query": q, "type": sc.counting_type, **r}
+            row = {"video": v.name, "task": v.task}
+            if args.suite:
+                row["nhóm"] = group
+            row.update({"query": q, "type": sc.counting_type, **r})
             ok = (r.get("det/frame", 0) > 0
                   and (r.get("total", r.get("đỉnh_vùng", 0)) >= sc.expect_min))
             row["verdict"] = "✅" if ok else "⚠️"
             rows.append(row)
+            tag = f"[{group}] " if group else ""
             if sc.counting_type == "line":
-                print(f"  · query={q!r} → IN={r.get('IN')} OUT={r.get('OUT')} "
+                print(f"  · {tag}query={q!r} → IN={r.get('IN')} OUT={r.get('OUT')} "
                       f"total={r.get('total')} det/frame={r.get('det/frame')} fps={r.get('fps')}")
             else:
-                print(f"  · query={q!r} → trong_vùng={r.get('trong_vùng')} đỉnh={r.get('đỉnh_vùng')} "
+                print(f"  · {tag}query={q!r} → trong_vùng={r.get('trong_vùng')} đỉnh={r.get('đỉnh_vùng')} "
                       f"det/frame={r.get('det/frame')} fps={r.get('fps')}")
 
     # Tách scorecard theo kiểu đếm (line/zone khác cột) cho gọn.
@@ -255,6 +263,9 @@ def main() -> int:
                          "(vd 'cardboard box,plastic bottle,damaged package') — tự bật open-vocab")
     ap.add_argument("--all-queries", action="store_true",
                     help="test TẤT CẢ query khó gợi ý sẵn của mỗi video (cột 'queries' trong --list)")
+    ap.add_argument("--suite", action="store_true",
+                    help="chạy BỘ QUERY SUITE đầy đủ theo NHÓM cho bài toán (cơ bản/màu/phụ kiện/"
+                         "hành động/khó/tiếng Việt) — nhiều trường hợp như bảng test Excel")
     ap.add_argument("--max-frames", type=int, default=300)
     ap.add_argument("--confidence", type=float, default=0.35)
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
