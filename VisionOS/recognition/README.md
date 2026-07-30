@@ -258,6 +258,12 @@ khó: `--yolo-weights yolo11x.pt --tile --proc-width 1920 --confidence 0.15` (ch
 tốt hơn ở cảnh đông. Lưu ý: **supervision KHÔNG tự detect** — nó chỉ track/vẽ/đếm trên
 kết quả của model ngoài (YOLO/RT-DETR), đúng như package này đang làm.
 
+**Ảnh TOP-DOWN/DRONE (từ trên xuống):** YOLO COCO học ảnh chụp NGANG nên bắt kém góc
+bird's-eye. Cắm **model train trên ảnh aerial (VisDrone)**:
+`--yolo-weights hf://<owner>/<repo>/<file>.pt --classes "car,van,truck,bus"` (tải model
+từ HuggingFace; `--classes` để lọc theo tên lớp của model đó, vì tên khác COCO). Cũng
+nhận http URL hoặc đường dẫn .pt cục bộ. Đây là cách supervision demo top-down detect được.
+
 Video output ghi đúng **FPS nguồn** (chia cho `--stride`) nên không còn phát chậm như
 slow-motion.
 

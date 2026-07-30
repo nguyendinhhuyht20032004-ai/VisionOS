@@ -534,7 +534,11 @@ def main() -> int:
                     help="bộ đếm: sv = supervision (ByteTrack+LineZone, CHUẨN hơn), "
                          "builtin = tự viết (CentroidTracker). auto = sv nếu cài được")
     ap.add_argument("--yolo-weights", default=None,
-                    help="model YOLO: yolov8m.pt (mặc định) / yolov8l.pt / yolov8x.pt (mạnh hơn, chậm hơn)")
+                    help="model YOLO: yolov8m.pt (mặc định) / yolov8l.pt / yolov8x.pt / rtdetr-x.pt, "
+                         "hoặc model tuỳ biến: đường dẫn .pt, http URL, hay 'hf://owner/repo/file.pt' (VisDrone…)")
+    ap.add_argument("--classes", default=None,
+                    help="lọc lớp theo TÊN (ngăn phẩy) — cho model tuỳ biến tên lớp khác COCO, "
+                         "vd VisDrone: 'car,van,truck,bus' hoặc 'pedestrian,people'")
     ap.add_argument("--imgsz", type=int, default=None,
                     help="cỡ ảnh suy luận YOLO (mặc định 960; 1280 bắt vật NHỎ/top-down tốt hơn)")
     ap.add_argument("--tile", action="store_true",
@@ -564,6 +568,8 @@ def main() -> int:
         os.environ["YOLO_IMGSZ"] = str(args.imgsz)
     if args.tile:
         os.environ["YOLO_TILE"] = "1"
+    if args.classes:
+        os.environ["YOLO_CLASSES"] = args.classes
     return run(args)
 
 

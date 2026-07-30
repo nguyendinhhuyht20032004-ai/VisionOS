@@ -44,7 +44,14 @@ class UltralyticsYoloDetector:
                            else float(os.environ.get("YOLO_CONF", "0.25")))
         self.iou = iou
         self.imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "960"))
-        self.want = set(want) if want else None  # None = suy ra từ prompt
+        # Lớp cần giữ: ưu tiên tham số, rồi env YOLO_CLASSES (cho model tuỳ biến như
+        # VisDrone có tên lớp khác COCO), None = suy ra từ prompt.
+        if want:
+            self.want = set(want)
+        elif os.environ.get("YOLO_CLASSES"):
+            self.want = {c.strip().lower() for c in os.environ["YOLO_CLASSES"].split(",") if c.strip()}
+        else:
+            self.want = None
         self.device = device
         # TILED inference (SAHI): cắt ảnh thành ô nhỏ rồi chạy YOLO từng ô → vật NHỎ
         # (xe top-down/aerial) to hơn trong ô nên detect được. Bật qua YOLO_TILE=1.
@@ -70,22 +77,38 @@ class UltralyticsYoloDetector:
             from ultralytics import YOLO
 
         t0 = time.time()
+        w = self._resolve_weights(self.weights)   # hf://… → tải về; URL/path để nguyên
         # RT-DETR (detector transformer của supervision demo) dùng class riêng; YOLO cho phần còn lại.
-        if "rtdetr" in self.weights.lower() or "rt-detr" in self.weights.lower():
+        if "rtdetr" in w.lower() or "rt-detr" in w.lower():
             try:
                 from ultralytics import RTDETR
 
-                self._model = RTDETR(self.weights)
+                self._model = RTDETR(w)
             except Exception:  # noqa: BLE001 — ultralytics cũ → thử YOLO()
-                self._model = YOLO(self.weights)
+                self._model = YOLO(w)
         else:
-            self._model = YOLO(self.weights)  # tự tải weight lần đầu
+            self._model = YOLO(w)             # tự tải weight (kể cả http URL) lần đầu
         if self.device:
             self._model.to(self.device)
         self._names = self._model.names       # dict {id: 'person', ...}
         print(f"✅ YOLOv8 ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}) "
               f"loaded in {time.time() - t0:.1f}s")
         return self
+
+    @staticmethod
+    def _resolve_weights(w: str) -> str:
+        """``hf://repo_id/đường/dẫn.pt`` → tải từ HuggingFace về path cục bộ. Còn lại
+        (tên yolo, path, http URL) để nguyên cho ultralytics tự xử lý (nó tải URL được).
+        """
+        if w.startswith("hf://"):
+            from huggingface_hub import hf_hub_download
+
+            parts = w[len("hf://"):].split("/")
+            repo_id = "/".join(parts[:2])          # owner/name
+            filename = "/".join(parts[2:]) or "best.pt"
+            print(f"⬇️  tải model từ HuggingFace: {repo_id} / {filename}")
+            return hf_hub_download(repo_id=repo_id, filename=filename)
+        return w
 
     def _wanted_classes(self, prompt: str) -> Set[str]:
         """Suy ra tập lớp COCO cần giữ từ prompt (khớp COCO_ALIASES của YOLO-NAS)."""
@@ -108,7 +131,7 @@ class UltralyticsYoloDetector:
         for b in boxes:
             cls_id = int(b.cls[0])
             name = names[cls_id]
-            if want and name not in want:
+            if want and name.lower() not in want:
                 continue
             conf = float(b.conf[0])
             x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())
@@ -169,7 +192,7 @@ class UltralyticsYoloDetector:
         dets: List[Detection] = []
         for i in range(len(det)):
             name = self._names[int(det.class_id[i])]
-            if want and name not in want:
+            if want and name.lower() not in want:
                 continue
             x1, y1, x2, y2 = (float(v) for v in det.xyxy[i])
             conf = float(det.confidence[i]) if det.confidence is not None else 0.85
