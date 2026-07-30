@@ -11,6 +11,7 @@ môi trường không có sẵn (phần test dùng detector giả / result giả
 
 from __future__ import annotations
 
+import os
 import time
 from typing import List, Optional, Set
 
@@ -21,19 +22,28 @@ __all__ = ["UltralyticsYoloDetector"]
 
 
 class UltralyticsYoloDetector:
-    """Detector YOLOv8 (ultralytics) cho đối tượng COCO: người, xe…"""
+    """Detector YOLOv8 (ultralytics) cho đối tượng COCO: người, xe…
+
+    Mặc định dùng **yolov8m** (mạnh hơn yolov8n rất nhiều — nano hay BỎ SÓT người ở
+    xa/tối và xe nhỏ top-down) + **imgsz lớn** (bắt vật nhỏ tốt hơn) + **conf thấp**.
+    Chỉnh qua env: ``YOLO_WEIGHTS`` (vd yolov8l.pt/yolov8x.pt), ``YOLO_IMGSZ``,
+    ``YOLO_CONF``.
+    """
 
     def __init__(
         self,
-        weights: str = "yolov8n.pt",
-        confidence: float = 0.35,
+        weights: Optional[str] = None,
+        confidence: Optional[float] = None,
         iou: float = 0.5,
         want: Optional[Set[str]] = None,
         device: Optional[str] = None,
+        imgsz: Optional[int] = None,
     ):
-        self.weights = weights
-        self.confidence = confidence
+        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8m.pt")
+        self.confidence = (confidence if confidence is not None
+                           else float(os.environ.get("YOLO_CONF", "0.25")))
         self.iou = iou
+        self.imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "960"))
         self.want = set(want) if want else None  # None = suy ra từ prompt
         self.device = device
         self._model = None
@@ -58,7 +68,8 @@ class UltralyticsYoloDetector:
         if self.device:
             self._model.to(self.device)
         self._names = self._model.names       # dict {id: 'person', ...}
-        print(f"✅ YOLOv8 ({self.weights}) loaded in {time.time() - t0:.1f}s")
+        print(f"✅ YOLOv8 ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}) "
+              f"loaded in {time.time() - t0:.1f}s")
         return self
 
     def _wanted_classes(self, prompt: str) -> Set[str]:
@@ -95,7 +106,8 @@ class UltralyticsYoloDetector:
             self.load()
         t0 = time.time()
         want = self._wanted_classes(prompt)
-        result = self._model(frame, conf=self.confidence, iou=self.iou, verbose=False)[0]
+        result = self._model(frame, conf=self.confidence, iou=self.iou,
+                             imgsz=self.imgsz, verbose=False)[0]
         dets = self._boxes_to_detections(result.boxes, self._names, want)
         return DetectorResult(
             dets,

@@ -139,10 +139,10 @@ _VEHICLES = [
             ((63.3, 38.1), (85.3, 39.7), (86.1, 60.8), (63.9, 60.3)),
             ((41.6, 68.6), (58.4, 69.2), (58.3, 96.9), (42.3, 98.1)),
             ((41.3, 43.1), (59.5, 44.2), (59.2, 60.6), (41.9, 63.1)),
-        ), res=(640, 360), prompt="car", anchor="CENTER"),
+        ), res=(1280, 720), prompt="car", anchor="CENTER"),
         "Pexels 3121459 · giao thông phố — 5 VÙNG đếm CHUNG (user vẽ)",
         "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",),
-        tips="Đếm xe trong 5 vùng — ra 1 số tổng (không tách từng vùng)."),
+        tips="Đếm xe trong 5 vùng — ra 1 số tổng (giữ res cao để bắt xe nhỏ)."),
 ]
 
 # --------------------------------------------------------------------------- #

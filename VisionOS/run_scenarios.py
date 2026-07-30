@@ -472,8 +472,13 @@ def main() -> int:
                     help="bỏ bớt frame: chỉ lấy mỗi frame thứ N (nhanh hơn). Mặc định suite=2, thường=1")
     ap.add_argument("--max-frames", type=int, default=None,
                     help="số frame tối đa mỗi lần đếm. Mặc định suite=60 (nhanh), thường=300")
-    ap.add_argument("--confidence", type=float, default=0.35)
+    ap.add_argument("--confidence", type=float, default=0.25,
+                    help="ngưỡng tin cậy YOLO (thấp = bắt nhiều hơn, mặc định 0.25)")
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
+    ap.add_argument("--yolo-weights", default=None,
+                    help="model YOLO: yolov8m.pt (mặc định) / yolov8l.pt / yolov8x.pt (mạnh hơn, chậm hơn)")
+    ap.add_argument("--imgsz", type=int, default=None,
+                    help="cỡ ảnh suy luận YOLO (mặc định 960; 1280 bắt vật NHỎ/top-down tốt hơn)")
     ap.add_argument("--only", default=None, help="lọc video theo từ khoá (tên/file/key), vd 'milk'")
     ap.add_argument("--line", default=None,
                     help="ÉP vạch đếm: 'x1,y1,x2,y2' theo %% (0-100). VD dọc lệch trái: '35,0,35,100'")
@@ -488,6 +493,11 @@ def main() -> int:
                     help="LƯU VIDEO OUTPUT (vẽ vạch/vùng + box + số đếm) vào thư mục này")
     ap.add_argument("--list", action="store_true", help="chỉ liệt kê catalog, không tải/chạy")
     args = ap.parse_args()
+    # Truyền lựa chọn YOLO qua env để detector (nạp lazy) đọc được.
+    if args.yolo_weights:
+        os.environ["YOLO_WEIGHTS"] = args.yolo_weights
+    if args.imgsz:
+        os.environ["YOLO_IMGSZ"] = str(args.imgsz)
     return run(args)
 
 

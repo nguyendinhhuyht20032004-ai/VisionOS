@@ -234,6 +234,11 @@ trên cùng 1 video, scorecard in mỗi vùng 1 dòng).
 `--max-frames`, `--stride`. Cần **bộ đầy đủ** thì dùng `--suite-full` (chậm). Nên chạy
 **1 video** với `--only` khi test open-vocab trên Colab (model 3B chậm ~1-2s/frame).
 
+**Nhận diện yếu (bỏ sót người/xe)?** Mặc định dùng **YOLOv8m** (mạnh hơn nano nhiều),
+`--confidence 0.25`, `--imgsz 960`. Vật NHỎ (xe top-down) → thêm `--imgsz 1280`. Vẫn
+sót → model mạnh hơn: `--yolo-weights yolov8l.pt` / `yolov8x.pt` (chậm hơn) hoặc hạ
+`--confidence 0.2`. Chỉnh nhanh qua env: `YOLO_WEIGHTS`, `YOLO_IMGSZ`, `YOLO_CONF`.
+
 Bài **NGƯỜI** tách 2 kiểu đếm (scorecard in riêng): **cắt VẠCH** (vào/ra) và
 **đếm VÙNG** (occupancy — hợp cảnh người đi lại lộn xộn như quảng trường). Video
 output tô: **vàng = vạch**, **xanh mờ = vùng**, **xanh dương = box + #track-id**.
