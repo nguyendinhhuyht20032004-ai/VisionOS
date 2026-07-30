@@ -99,7 +99,24 @@ def test_people_has_both_line_and_zone():
 def test_zone_scenarios_have_polygon():
     for v in CATALOG:
         if v.scenario.counting_type == "zone":
-            assert len(v.scenario.zone_points_pct) >= 3   # đủ đỉnh để tạo vùng
+            zones = v.scenario.build_zones()               # hỗ trợ 1 hoặc NHIỀU vùng
+            assert zones, f"{v.scenario.key} không có vùng nào"
+            assert all(len(z.points_pct) >= 3 for z in zones), v.scenario.key
+
+
+def test_multi_zone_scenarios_merged_not_split():
+    # user yêu cầu: nhiều vùng trên 1 video → GỘP 1 bài (không tách từng vùng 1 case).
+    byk = {v.scenario.key: v.scenario for v in CATALOG}
+    assert "veh_px2_zone" in byk and len(byk["veh_px2_zone"].build_zones()) == 5
+    assert "ppl_store_zone" in byk and len(byk["ppl_store_zone"].build_zones()) == 3
+    # KHÔNG còn scenario tách riêng từng vùng
+    keys = set(byk)
+    assert not any(k.endswith(("_z1", "_z2", "_z3", "_z4", "_z5")) for k in keys)
+
+
+def test_conv_action_removed():
+    keys = {v.scenario.key for v in CATALOG}
+    assert "conv_action" not in keys                      # user: không phải băng chuyền
 
 
 def test_by_task_filter():

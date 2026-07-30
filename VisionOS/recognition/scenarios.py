@@ -13,7 +13,7 @@ hay vùng) và cấu hình vạch/vùng. Đây là 4 bài toán đếm cốt lõ
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .base import MonitoringMode
 from .zones import CountingLine, Zone
@@ -47,6 +47,9 @@ class CountScenario:
     out_label: str = "OUT"
     # Vùng đếm (khi counting_type == "zone"), toạ độ phần trăm 0..100.
     zone_points_pct: Tuple[Tuple[float, float], ...] = ()
+    # NHIỀU vùng đếm CHUNG trong 1 bài (đếm vật trong BẤT KỲ vùng nào) — vd nhiều
+    # làn/ô. Nếu set thì dùng cái này thay cho zone_points_pct đơn lẻ.
+    zones_pct: Tuple[Tuple[Tuple[float, float], ...], ...] = ()
     zone_anchor: str = "BOTTOM_CENTER"   # điểm neo xét thuộc vùng / cắt vạch
     max_frames: int = 150
     expect_min: int = 1                  # kỳ vọng "sanity" cho scorecard
@@ -59,8 +62,13 @@ class CountScenario:
             raise ValueError(f"[{self.key}] prompt rỗng")
         if self.counting_type not in ("line", "zone"):
             raise ValueError(f"[{self.key}] counting_type sai: {self.counting_type}")
-        if self.counting_type == "zone" and len(self.zone_points_pct) < 3:
-            raise ValueError(f"[{self.key}] vùng đếm cần ≥3 đỉnh")
+        if self.counting_type == "zone":
+            if self.zones_pct:
+                for i, pts in enumerate(self.zones_pct):
+                    if len(pts) < 3:
+                        raise ValueError(f"[{self.key}] vùng #{i + 1} cần ≥3 đỉnh")
+            elif len(self.zone_points_pct) < 3:
+                raise ValueError(f"[{self.key}] vùng đếm cần ≥3 đỉnh")
         w, h = self.resolution
         if w <= 0 or h <= 0:
             raise ValueError(f"[{self.key}] resolution không hợp lệ")
@@ -82,6 +90,18 @@ class CountScenario:
             points_pct=list(self.zone_points_pct),
             role="monitor",
         )
+
+    def build_zones(self) -> List[Zone]:
+        """Trả về DANH SÁCH vùng (đa-vùng nếu ``zones_pct`` set, ngược lại 1 vùng)."""
+        if self.zones_pct:
+            return [
+                Zone(id=f"zone-{self.key}-{i + 1}", name=f"{self.title} #{i + 1}",
+                     points_pct=list(pts), role="monitor")
+                for i, pts in enumerate(self.zones_pct)
+            ]
+        if self.zone_points_pct:
+            return [self.build_zone()]
+        return []
 
 
 # --------------------------------------------------------------------------- #

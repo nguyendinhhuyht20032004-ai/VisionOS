@@ -94,14 +94,14 @@ def _ppl_zone(key, title, points, res=(1280, 720)):
     )
 
 
-def _veh_zone(key, title, points, res=(1280, 720), prompt="car"):
-    """Bài đếm XE TRONG VÙNG (occupancy) — vd đếm xe trong ô/làn/bãi."""
+def _zone_multi(key, title, zones, res=(1280, 720), prompt="person", anchor="BOTTOM_CENTER"):
+    """Bài đếm TRONG NHIỀU VÙNG (gộp 1 bài) — đếm vật đang ở BẤT KỲ vùng nào."""
     return CountScenario(
         key=key, title=title, usecase_id=f"uc-{key}",
         mode=MonitoringMode.STANDARD, model="YOLO-NAS-S", prompt=prompt,
-        counting_type="zone", zone_points_pct=points, zone_anchor="CENTER",
+        counting_type="zone", zones_pct=zones, zone_anchor=anchor,
         resolution=res, expect_min=0,
-        notes="Đếm số xe ĐANG ở trong vùng bạn khoanh.",
+        notes="Đếm số vật ĐANG trong bất kỳ vùng nào (gộp nhiều vùng, 1 số tổng).",
     )
 
 
@@ -131,32 +131,18 @@ _VEHICLES = [
             "Vạch ngang (user vẽ)."),
         "Pexels · highway traffic (tiêu đề Pexels: highway)", "traffic_pexels_2103099.mp4",
         pexels_id="2103099", queries=("car", "truck")),
-    # veh_px2: user vẽ 5 VÙNG (đếm xe theo từng ô/làn) trên cùng frame.
-    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 1", "vehicles",
-        _veh_zone("veh_px2_z1", "Đếm xe vùng 1",
-                  ((21.6, 41.1), (37.7, 40.6), (36.7, 62.5), (20.5, 62.2)), res=(640, 360)),
-        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
-        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 1."),
-    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 2", "vehicles",
-        _veh_zone("veh_px2_z2", "Đếm xe vùng 2",
-                  ((41.4, 0.6), (60.8, 1.4), (60.6, 38.9), (40.5, 37.8)), res=(640, 360)),
-        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
-        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 2."),
-    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 3", "vehicles",
-        _veh_zone("veh_px2_z3", "Đếm xe vùng 3",
-                  ((63.3, 38.1), (85.3, 39.7), (86.1, 60.8), (63.9, 60.3)), res=(640, 360)),
-        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
-        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 3."),
-    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 4", "vehicles",
-        _veh_zone("veh_px2_z4", "Đếm xe vùng 4",
-                  ((41.6, 68.6), (58.4, 69.2), (58.3, 96.9), (42.3, 98.1)), res=(640, 360)),
-        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
-        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 4."),
-    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 5", "vehicles",
-        _veh_zone("veh_px2_z5", "Đếm xe vùng 5",
-                  ((41.3, 43.1), (59.5, 44.2), (59.2, 60.6), (41.9, 63.1)), res=(640, 360)),
-        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
-        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 5."),
+    # veh_px2: 5 VÙNG user vẽ → GỘP 1 BÀI (đếm xe trong BẤT KỲ vùng nào, ra 1 số tổng).
+    VideoScenario("Giao thông (Pexels 3121459) — đếm xe trong VÙNG", "vehicles",
+        _zone_multi("veh_px2_zone", "Đếm xe trong các vùng", (
+            ((21.6, 41.1), (37.7, 40.6), (36.7, 62.5), (20.5, 62.2)),
+            ((41.4, 0.6), (60.8, 1.4), (60.6, 38.9), (40.5, 37.8)),
+            ((63.3, 38.1), (85.3, 39.7), (86.1, 60.8), (63.9, 60.3)),
+            ((41.6, 68.6), (58.4, 69.2), (58.3, 96.9), (42.3, 98.1)),
+            ((41.3, 43.1), (59.5, 44.2), (59.2, 60.6), (41.9, 63.1)),
+        ), res=(640, 360), prompt="car", anchor="CENTER"),
+        "Pexels 3121459 · giao thông phố — 5 VÙNG đếm CHUNG (user vẽ)",
+        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",),
+        tips="Đếm xe trong 5 vùng — ra 1 số tổng (không tách từng vùng)."),
 ]
 
 # --------------------------------------------------------------------------- #
@@ -183,25 +169,26 @@ _CONVEYOR = [
         queries=("cardboard box", "package", "a sealed box", "a brown box",
                  "a damaged package", "the largest box"),
         tips="Bài 'đếm sản phẩm' điển hình — thùng carton KHÔNG thuộc COCO."),
-    VideoScenario("Hệ thống chuyền đang chạy (Pexels 35069357)", "conveyor",
-        _conv("conv_action", "Đếm vật trên chuyền", "an item on the conveyor belt", "LocateAnything-3B"),
-        "Pexels · 'industrial conveyor system in action' — nhiều vật chạy",
-        "conveyor_action_35069357.mp4", pexels_id="35069357",
-        queries=("an item on the conveyor belt", "a product", "a box", "a package",
-                 "the item closest to the camera")),
+    # (đã bỏ conv_action / Pexels 35069357 — user xác nhận KHÔNG phải băng chuyền.)
     VideoScenario("Dây chuyền nhà máy rộng (Pexels 30715848)", "conveyor",
-        _conv("conv_line", "Đếm sản phẩm dây chuyền", "product on the production line", "LocateAnything-3B"),
+        _sc("conv_line", "Đếm sản phẩm dây chuyền", "product on the production line", "LocateAnything-3B",
+            (80.2, 66.8), (94.4, 63.2), "Qua vạch", "Ngược", "CENTER", (1280, 720),
+            "Vạch theo chỗ sản phẩm chạy (user vẽ)."),
         "Pexels · 'wide view of modern factory production line' — góc rộng nhiều sản phẩm",
         "conveyor_line_30715848.mp4", pexels_id="30715848",
         queries=("product on the production line", "finished product",
                  "an item being assembled", "a bottle", "a box")),
     VideoScenario("Băng chuyền nhà máy (Pexels 4473250)", "conveyor",
-        _conv("conv_fac", "Đếm vật trên chuyền", "item on the conveyor belt", "LocateAnything-3B"),
+        _sc("conv_fac", "Đếm vật trên chuyền", "item on the conveyor belt", "LocateAnything-3B",
+            (14.8, 64.0), (84.2, 76.8), "Qua vạch", "Ngược", "CENTER", (1280, 720),
+            "Vạch chéo theo chuyền (user vẽ)."),
         "Pexels · 'factory conveyor belt'", "conveyor_factory_4473250.mp4",
         pexels_id="4473250",
         queries=("item on the conveyor belt", "product", "a metal part", "a small component")),
     VideoScenario("Băng chuyền cận cảnh (Pexels 4473187)", "conveyor",
-        _conv("conv_close", "Đếm vật băng chuyền", "product on the conveyor belt", "LocateAnything-3B"),
+        _sc("conv_close", "Đếm vật băng chuyền", "product on the conveyor belt", "LocateAnything-3B",
+            (37.9, 47.5), (73.1, 34.9), "Qua vạch", "Ngược", "CENTER", (1280, 720),
+            "Vạch chéo cận cảnh (user vẽ)."),
         "Pexels · 'black conveyor belt' cận cảnh", "conveyor_black_4473187.mp4",
         pexels_id="4473187",
         queries=("object on the belt", "product", "a dark colored item")),
@@ -241,22 +228,16 @@ _PEOPLE = [
         "Roboflow supervision · lối đi siêu thị — TIN CẬY", "grocery-store.mp4",
         asset="GROCERY_STORE",
         queries=("person", "a shopper pushing a cart", "a person holding a basket")),
-    # Siêu thị: user vẽ 3 VÙNG đếm occupancy (3 khu vực) trên cùng frame.
-    VideoScenario("Siêu thị — VÙNG 1 (supervision)", "people",
-        _ppl_zone("ppl_store_z1", "Đếm người khu 1 siêu thị",
-                  ((0.7, 31.8), (27.0, 34.0), (27.6, 96.1), (0.7, 99.2))),
-        "Roboflow supervision · siêu thị — VÙNG trái (user vẽ)", "grocery-store.mp4",
-        asset="GROCERY_STORE", queries=("person",), tips="Vùng 1 (trái) — user vẽ."),
-    VideoScenario("Siêu thị — VÙNG 2 (supervision)", "people",
-        _ppl_zone("ppl_store_z2", "Đếm người khu 2 siêu thị",
-                  ((62.0, 40.8), (97.7, 9.4), (96.6, 99.6), (62.3, 55.8))),
-        "Roboflow supervision · siêu thị — VÙNG phải (user vẽ)", "grocery-store.mp4",
-        asset="GROCERY_STORE", queries=("person",), tips="Vùng 2 (phải) — user vẽ."),
-    VideoScenario("Siêu thị — VÙNG 3 (supervision)", "people",
-        _ppl_zone("ppl_store_z3", "Đếm người khu 3 siêu thị",
-                  ((31.0, 14.9), (49.5, 41.3), (49.8, 60.7), (34.1, 97.2))),
-        "Roboflow supervision · siêu thị — VÙNG giữa (user vẽ)", "grocery-store.mp4",
-        asset="GROCERY_STORE", queries=("person",), tips="Vùng 3 (giữa) — user vẽ."),
+    # Siêu thị: 3 VÙNG user vẽ → GỘP 1 BÀI (đếm người trong BẤT KỲ vùng nào, 1 số tổng).
+    VideoScenario("Siêu thị — đếm người trong VÙNG", "people",
+        _zone_multi("ppl_store_zone", "Đếm người trong các vùng siêu thị", (
+            ((0.7, 31.8), (27.0, 34.0), (27.6, 96.1), (0.7, 99.2)),
+            ((62.0, 40.8), (97.7, 9.4), (96.6, 99.6), (62.3, 55.8)),
+            ((31.0, 14.9), (49.5, 41.3), (49.8, 60.7), (34.1, 97.2)),
+        ), prompt="person", anchor="BOTTOM_CENTER"),
+        "Roboflow supervision · siêu thị — 3 VÙNG đếm CHUNG (user vẽ)", "grocery-store.mp4",
+        asset="GROCERY_STORE", queries=("person",),
+        tips="Đếm người trong 3 vùng — ra 1 số tổng (không tách)."),
     # market-square: NGƯỜI ĐI LẠI nhiều hướng → tách 2 bài như user yêu cầu.
     VideoScenario("Quảng trường — vào/ra (supervision)", "people",
         _sc("ppl_square_line", "Đếm người vào/ra quảng trường", "person", "YOLO-NAS-S",

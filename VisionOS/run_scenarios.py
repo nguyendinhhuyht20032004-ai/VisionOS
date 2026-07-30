@@ -83,9 +83,9 @@ def _draw_overlay(frame, tracked, pipe):
     if pipe.line is not None:
         (sx, sy), (ex, ey) = pipe.line.endpoints(w, h)
         cv2.line(img, (int(sx), int(sy)), (int(ex), int(ey)), YELLOW, 3)
-    # Vùng (zone) — tô xanh mờ + viền.
-    if pipe.zone is not None:
-        pts = np.array([[int(x), int(y)] for x, y in pipe.zone.to_pixels(w, h)], dtype=np.int32)
+    # Vùng (zone) — tô xanh mờ + viền. Hỗ trợ NHIỀU vùng (đếm chung).
+    for z in getattr(pipe, "zones", []) or ([pipe.zone] if pipe.zone else []):
+        pts = np.array([[int(x), int(y)] for x, y in z.to_pixels(w, h)], dtype=np.int32)
         ov = img.copy()
         cv2.fillPoly(ov, [pts], (0, 170, 0))
         cv2.addWeighted(ov, 0.25, img, 0.75, 0, img)
@@ -144,17 +144,18 @@ def _draw_scenario_geom(frame, sc):
 
     h, w = frame.shape[:2]
     if sc.counting_type == "zone":
-        pts = np.array([[int(x), int(y)] for x, y in sc.build_zone().to_pixels(w, h)], dtype=np.int32)
-        ov = frame.copy()
-        cv2.fillPoly(ov, [pts], (0, 170, 0))
-        cv2.addWeighted(ov, 0.3, frame, 0.7, 0, frame)
-        cv2.polylines(frame, [pts], True, (0, 255, 0), 3)
-        for (px, py), (xp, yp) in zip(pts, sc.zone_points_pct):  # chấm + toạ độ % mỗi đỉnh
-            cv2.circle(frame, (int(px), int(py)), 4, (0, 255, 0), -1)
-            cv2.putText(frame, f"({xp:.0f},{yp:.0f})", (int(px) + 5, int(py) - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
-        cv2.putText(frame, "VUNG (zone)", (pts[0][0] + 4, pts[0][1] + 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        for zi, z in enumerate(sc.build_zones()):          # hỗ trợ NHIỀU vùng
+            pts = np.array([[int(x), int(y)] for x, y in z.to_pixels(w, h)], dtype=np.int32)
+            ov = frame.copy()
+            cv2.fillPoly(ov, [pts], (0, 170, 0))
+            cv2.addWeighted(ov, 0.3, frame, 0.7, 0, frame)
+            cv2.polylines(frame, [pts], True, (0, 255, 0), 3)
+            for (px, py), (xp, yp) in zip(pts, z.points_pct):   # chấm + toạ độ % mỗi đỉnh
+                cv2.circle(frame, (int(px), int(py)), 4, (0, 255, 0), -1)
+                cv2.putText(frame, f"({xp:.0f},{yp:.0f})", (int(px) + 5, int(py) - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+            cv2.putText(frame, f"VUNG {zi + 1}", (pts[0][0] + 4, pts[0][1] + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     else:
         (x1, y1), (x2, y2) = sc.line_start_pct, sc.line_end_pct
         (sx, sy), (ex, ey) = sc.build_line().endpoints(w, h)

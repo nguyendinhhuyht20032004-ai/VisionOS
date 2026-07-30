@@ -97,9 +97,12 @@ class CountingPipeline:
         self.line: Optional[CountingLine] = (
             scenario.build_line() if scenario.counting_type == "line" else None
         )
-        self.zone: Optional[Zone] = (
-            scenario.build_zone() if scenario.counting_type == "zone" else None
+        # ĐA-VÙNG: đếm vật trong BẤT KỲ vùng nào (list). self.zone giữ vùng đầu cho
+        # tương thích ngược; self.zones là danh sách đầy đủ để vẽ + đếm.
+        self.zones: List[Zone] = (
+            scenario.build_zones() if scenario.counting_type == "zone" else []
         )
+        self.zone: Optional[Zone] = self.zones[0] if self.zones else None
         # Vị trí anchor pixel trước đó của mỗi track, để xét cắt vạch.
         self._prev_anchor: dict = {}
         self._seen_tracks: Set[int] = set()
@@ -145,13 +148,13 @@ class CountingPipeline:
             self.result.in_count = self.line.in_count
             self.result.out_count = self.line.out_count
 
-        if self.zone is not None:
+        if self.zones:
             anchor = self.scenario.zone_anchor
             occupants = {
                 d.track_id
                 for d in tracked
                 if d.track_id is not None
-                and self.zone.contains(d.bbox.anchor(anchor), self.w, self.h)
+                and any(z.contains(d.bbox.anchor(anchor), self.w, self.h) for z in self.zones)
             }
             self.result.zone_current = len(occupants)
             self.result.zone_peak = max(self.result.zone_peak, len(occupants))
