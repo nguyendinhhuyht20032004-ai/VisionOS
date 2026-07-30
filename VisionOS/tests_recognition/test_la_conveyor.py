@@ -144,6 +144,43 @@ def test_run_video_saves_annotation(tmp_path, monkeypatch):
     assert os.path.exists(out) and os.path.getsize(out) > 0
 
 
+def test_run_video_polygon_occupancy(monkeypatch):
+    # PolygonZone phủ TOÀN khung → vật (giữa khung) luôn nằm trong vùng → peak≥1
+    frames = [np.zeros((180, 320, 3), dtype="uint8") for _ in range(12)]
+    monkeypatch.setattr(R, "iter_video_frames", lambda _p: iter(frames))
+    res = R.run_video(R._FakeDet(12), "dummy.mp4", "object",
+                      proc_width=320, max_frames=12, stride=1,
+                      polygon=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
+    assert hasattr(res, "zone_peak")
+    assert res.zone_peak >= 1
+
+
+def test_ascii_strips_vietnamese_diacritics():
+    assert R._ascii("cà chua") == "ca chua"
+    assert R._ascii("kiện hàng carton") == "kien hang carton"
+    assert R._ascii("băng chuyền") == "bang chuyen"
+    assert R._ascii("box") == "box"           # ASCII giữ nguyên
+
+
+def test_labels_match_detection_count():
+    import numpy as np
+    import supervision as sv
+    d = sv.Detections(xyxy=np.array([[0, 0, 10, 10], [20, 20, 30, 30]], dtype=float),
+                      confidence=np.array([0.9, 0.9], dtype=float),
+                      class_id=np.zeros(2, dtype=int))
+    labels = R._labels(d, "cà chua")
+    assert len(labels) == 2
+    assert all("ca chua" in x for x in labels)  # đã bỏ dấu
+
+
+def test_build_zone_and_annotators_smoke():
+    # dựng được PolygonZone + bộ annotator supervision (không crash)
+    zone = R._build_zone([(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)], 320, 180)
+    ann = R._make_annotators(zone)
+    assert ann["box"] is not None            # có annotator vẽ box
+    assert "zone" in ann
+
+
 def test_main_selftest_returns_zero():
     assert R.main(["--selftest"]) == 0
 

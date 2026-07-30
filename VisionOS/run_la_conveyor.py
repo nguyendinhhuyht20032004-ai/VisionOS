@@ -177,51 +177,152 @@ def build_scenario(proc_w: int, proc_h: int, prompt: str, max_frames: int,
     return scn
 
 
-def _annotate(frame_bgr, sv_d, pipe):
-    """Vẽ vạch + box + bộ đếm lên 1 frame (BGR) — để xem model bắt gì."""
-    import cv2
+# --------------------------------------------------------------------------- #
+# GÁN NHÃN bằng supervision (đẹp + chuẩn): box bo góc + nhãn + trace + vạch +
+# PolygonZone (khoanh vùng băng chuyền, đếm số vật trong vùng).
+# --------------------------------------------------------------------------- #
+def _build_zone(polygon_frac, w, h):
+    """Dựng ``sv.PolygonZone`` từ polygon (toạ độ % 0..1) ở độ phân giải (w,h)."""
+    import numpy as np
+    import supervision as sv
 
+    pts = np.array([[int(x * w), int(y * h)] for x, y in polygon_frac], dtype=int)
+    try:                                        # supervision mới: tự suy khung
+        return sv.PolygonZone(polygon=pts)
+    except TypeError:                           # bản cũ: cần frame_resolution_wh
+        return sv.PolygonZone(polygon=pts, frame_resolution_wh=(w, h))
+
+
+def _make_annotators(zone):
+    """Tạo bộ annotator supervision (bản nào thiếu class thì bỏ qua an toàn)."""
+    import supervision as sv
+
+    ann = {"box": None, "label": None, "trace": None, "line": None, "zone": None}
+    try:
+        ann["box"] = sv.RoundBoxAnnotator(thickness=2)
+    except Exception:  # noqa: BLE001 — bản cũ không có RoundBox
+        try:
+            ann["box"] = sv.BoxAnnotator(thickness=2)
+        except Exception:
+            pass
+    for key, mk in (
+        ("label", lambda: sv.LabelAnnotator(text_scale=0.4, text_thickness=1, text_padding=2)),
+        ("trace", lambda: sv.TraceAnnotator(thickness=2, trace_length=30)),
+        ("line", lambda: sv.LineZoneAnnotator(thickness=2, text_scale=0.6)),
+    ):
+        try:
+            ann[key] = mk()
+        except Exception:  # noqa: BLE001
+            ann[key] = None
+    if zone is not None:
+        try:
+            ann["zone"] = sv.PolygonZoneAnnotator(
+                zone=zone, color=sv.Color.GREEN, thickness=2, text_scale=0.6)
+        except Exception:  # noqa: BLE001
+            ann["zone"] = None
+    return ann
+
+
+def _ascii(s: str) -> str:
+    """Bỏ dấu tiếng Việt → ASCII (cv2.putText chỉ vẽ ASCII, có dấu ra '??')."""
+    import unicodedata
+
+    s = s.replace("đ", "d").replace("Đ", "D")
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode() or s
+
+
+def _labels(sv_d, text):
+    t_ascii = _ascii(text)
+    tids = getattr(sv_d, "tracker_id", None)
+    if tids is None:
+        return [t_ascii] * len(sv_d)
+    return [f"{t_ascii} #{int(t)}" if t is not None else t_ascii for t in tids]
+
+
+def _annotate_sv(frame_bgr, sv_d, line_zone, zone, ann, label_text):
+    """Vẽ đầy đủ tầng lớp supervision lên 1 frame (BGR) và trả ảnh đã vẽ."""
     img = frame_bgr.copy()
-    h, w = img.shape[:2]
-    (sx, sy), (ex, ey) = pipe.scenario.line.points(w, h)
-    cv2.line(img, (sx, sy), (ex, ey), (0, 0, 255), 2)
-    xyxy = getattr(sv_d, "xyxy", [])
-    for box in xyxy:
-        x1, y1, x2, y2 = (int(v) for v in box)
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    lz = pipe.line_zone
-    cv2.putText(img, f"IN {int(lz.in_count)}  OUT {int(lz.out_count)}  box {len(xyxy)}",
-                (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    if ann.get("zone") is not None:                 # nền: vùng polygon + số đếm
+        try:
+            img = ann["zone"].annotate(scene=img)
+        except Exception:  # noqa: BLE001
+            pass
+    if ann.get("trace") is not None and getattr(sv_d, "tracker_id", None) is not None:
+        try:
+            img = ann["trace"].annotate(img, sv_d)
+        except Exception:  # noqa: BLE001
+            pass
+    if ann.get("box") is not None:
+        try:
+            img = ann["box"].annotate(img, sv_d)
+        except Exception:  # noqa: BLE001
+            pass
+    if ann.get("label") is not None:
+        try:
+            img = ann["label"].annotate(img, sv_d, labels=_labels(sv_d, label_text))
+        except Exception:  # noqa: BLE001
+            pass
+    if line_zone is not None and ann.get("line") is not None:
+        try:
+            img = ann["line"].annotate(img, line_zone)
+        except Exception:  # noqa: BLE001
+            pass
     return img
 
 
 def run_video(detector, video, query, *, orient="vertical", line_pos=0.5,
               anchor="CENTER", proc_width=640, max_frames=30, stride=3,
-              save_annotated=None):
-    """Chạy 1 (video, query) → ``CountResult``. Model nạp SẴN ở ngoài để DÙNG LẠI
-    cho nhiều video/query (tránh nạp lại 6GB mỗi lần — đây là mấu chốt tốc độ).
+              polygon=None, save_annotated=None, save_video=None, out_fps=6):
+    """Chạy 1 (video, query) → ``CountResult`` (kèm ``.zone_peak``).
 
-    save_annotated: path .jpg → lưu frame NHIỀU box nhất (đã vẽ vạch + box) để xem.
+    Model nạp SẴN ở ngoài để DÙNG LẠI cho nhiều video/query (tránh nạp lại 6GB —
+    mấu chốt tốc độ). Gán nhãn bằng **supervision**: box bo góc + nhãn + trace +
+    LineZone, và **PolygonZone** nếu truyền ``polygon`` (list điểm % 0..1) →
+    đếm số vật ĐANG trong vùng (``res.zone_peak`` = đỉnh).
+
+    save_annotated: path .jpg → lưu frame NHIỀU box nhất (đã annotate).
+    save_video:     path .mp4 → xuất video đã annotate (fps=``out_fps``).
     """
     proc_h = max(2, round(proc_width * 9 / 16))
     scn = build_scenario(proc_width, proc_h, query, max_frames,
                          orient=orient, line_pos=line_pos, anchor=anchor)
     pipe = CountingPipeline(detector, scn, resize=True)
-    best = {"n": -1, "img": None}
+    zone = _build_zone(polygon, proc_width, proc_h) if polygon else None
+    ann = _make_annotators(zone)
+    st = {"n": -1, "img": None, "peak": 0, "writer": None}
 
     def cb(frame_bgr, sv_d, _pipe):
-        if len(sv_d) > best["n"]:
-            best["n"] = len(sv_d)
-            best["img"] = _annotate(frame_bgr, sv_d, _pipe)
+        if zone is not None:
+            try:
+                zone.trigger(sv_d)
+                st["peak"] = max(st["peak"], int(zone.current_count))
+            except Exception:  # noqa: BLE001
+                pass
+        img = _annotate_sv(frame_bgr, sv_d, _pipe.line_zone, zone, ann, query)
+        if len(sv_d) > st["n"]:
+            st["n"] = len(sv_d)
+            st["img"] = img.copy()
+        if save_video is not None:
+            import cv2
 
+            if st["writer"] is None:
+                os.makedirs(os.path.dirname(os.path.abspath(save_video)) or ".", exist_ok=True)
+                st["writer"] = cv2.VideoWriter(
+                    save_video, cv2.VideoWriter_fourcc(*"mp4v"),
+                    out_fps, (img.shape[1], img.shape[0]))
+            st["writer"].write(img)
+
+    need_cb = bool(save_annotated or save_video or polygon)
     res = pipe.run(strided(iter_video_frames(video), stride),
-                   max_frames=max_frames, on_frame=cb if save_annotated else None)
-    if save_annotated is not None and best["img"] is not None:
+                   max_frames=max_frames, on_frame=cb if need_cb else None)
+    if save_annotated is not None and st["img"] is not None:
         import cv2
 
-        d = os.path.dirname(os.path.abspath(save_annotated))
-        os.makedirs(d, exist_ok=True)
-        cv2.imwrite(save_annotated, best["img"])
+        os.makedirs(os.path.dirname(os.path.abspath(save_annotated)) or ".", exist_ok=True)
+        cv2.imwrite(save_annotated, st["img"])
+    if st["writer"] is not None:
+        st["writer"].release()
+    res.zone_peak = st["peak"]
     return res
 
 
