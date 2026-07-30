@@ -94,28 +94,69 @@ def _ppl_zone(key, title, points, res=(1280, 720)):
     )
 
 
+def _veh_zone(key, title, points, res=(1280, 720), prompt="car"):
+    """Bài đếm XE TRONG VÙNG (occupancy) — vd đếm xe trong ô/làn/bãi."""
+    return CountScenario(
+        key=key, title=title, usecase_id=f"uc-{key}",
+        mode=MonitoringMode.STANDARD, model="YOLO-NAS-S", prompt=prompt,
+        counting_type="zone", zone_points_pct=points, zone_anchor="CENTER",
+        resolution=res, expect_min=0,
+        notes="Đếm số xe ĐANG ở trong vùng bạn khoanh.",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 🚗 PHƯƠNG TIỆN — chỉ nguồn tin cậy (supervision + Pexels tiêu đề đúng/đã xác minh)
 # --------------------------------------------------------------------------- #
 _VEHICLES = [
+    # Vạch xe do user vẽ tay trên frame thật (ngang gần đáy, hơi nghiêng theo đường).
     VideoScenario("Cao tốc top-down (supervision)", "vehicles",
-        _veh("veh_hw", "Xe cao tốc"), "Roboflow supervision · cao tốc quay dọc — TIN CẬY",
+        _sc("veh_hw", "Xe cao tốc", "car", "YOLO-NAS-S",
+            (3.4, 90.3), (98.4, 82.9), "Chiều A", "Chiều B", "CENTER", (1280, 720),
+            "Vạch ngang gần đáy (user vẽ)."),
+        "Roboflow supervision · cao tốc quay dọc — TIN CẬY",
         "vehicles.mp4", asset="VEHICLES",
         queries=("car", "white car", "truck", "a vehicle changing lane"),
         tips="Kinh điển đếm xe; đổi prompt để test 'truck'/'bus'."),
     VideoScenario("Giao lộ nhiều làn (supervision)", "vehicles",
-        _veh("veh_junc", "Xe giao lộ", y=55.0), "Roboflow supervision · nhiều làn — TIN CẬY",
+        _sc("veh_junc", "Xe giao lộ", "car", "YOLO-NAS-S",
+            (3.5, 93.6), (93.2, 88.8), "Chiều A", "Chiều B", "CENTER", (1280, 720),
+            "Vạch ngang gần đáy (user vẽ)."),
+        "Roboflow supervision · nhiều làn — TIN CẬY",
         "vehicles-2.mp4", asset="VEHICLES_2",
         queries=("car", "bus", "truck", "a car turning")),
     VideoScenario("Cao tốc 1080p (Pexels 2103099)", "vehicles",
-        _veh("veh_px1", "Xe cao tốc 1080p", res=(1920, 1080)),
+        _sc("veh_px1", "Xe cao tốc 1080p", "car", "YOLO-NAS-S",
+            (0.0, 75.0), (99.4, 78.5), "Chiều A", "Chiều B", "CENTER", (1920, 1080),
+            "Vạch ngang (user vẽ)."),
         "Pexels · highway traffic (tiêu đề Pexels: highway)", "traffic_pexels_2103099.mp4",
         pexels_id="2103099", queries=("car", "truck")),
-    VideoScenario("Giao thông (Pexels 3121459)", "vehicles",
-        _veh("veh_px2", "Xe cộ trên phố", res=(640, 360)),
-        "Pexels 3121459 · NGƯỜI DÙNG XÁC NHẬN là giao thông (không phải người đi bộ)",
-        "traffic_pexels_3121459.mp4", pexels_id="3121459",
-        queries=("car", "motorcycle", "a vehicle")),
+    # veh_px2: user vẽ 5 VÙNG (đếm xe theo từng ô/làn) trên cùng frame.
+    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 1", "vehicles",
+        _veh_zone("veh_px2_z1", "Đếm xe vùng 1",
+                  ((21.6, 41.1), (37.7, 40.6), (36.7, 62.5), (20.5, 62.2)), res=(640, 360)),
+        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
+        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 1."),
+    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 2", "vehicles",
+        _veh_zone("veh_px2_z2", "Đếm xe vùng 2",
+                  ((41.4, 0.6), (60.8, 1.4), (60.6, 38.9), (40.5, 37.8)), res=(640, 360)),
+        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
+        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 2."),
+    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 3", "vehicles",
+        _veh_zone("veh_px2_z3", "Đếm xe vùng 3",
+                  ((63.3, 38.1), (85.3, 39.7), (86.1, 60.8), (63.9, 60.3)), res=(640, 360)),
+        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
+        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 3."),
+    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 4", "vehicles",
+        _veh_zone("veh_px2_z4", "Đếm xe vùng 4",
+                  ((41.6, 68.6), (58.4, 69.2), (58.3, 96.9), (42.3, 98.1)), res=(640, 360)),
+        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
+        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 4."),
+    VideoScenario("Giao thông (Pexels 3121459) — VÙNG 5", "vehicles",
+        _veh_zone("veh_px2_z5", "Đếm xe vùng 5",
+                  ((41.3, 43.1), (59.5, 44.2), (59.2, 60.6), (41.9, 63.1)), res=(640, 360)),
+        "Pexels 3121459 · giao thông phố — VÙNG (user vẽ)",
+        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",), tips="Vùng 5."),
 ]
 
 # --------------------------------------------------------------------------- #
