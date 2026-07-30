@@ -128,10 +128,12 @@ class UltralyticsYoloDetector:
         )
 
     def _detect_tiled(self, frame, want: Set[str]) -> List[Detection]:
-        """Chạy YOLO trên NHIỀU Ô cắt từ frame (supervision.InferenceSlicer) → gộp NMS.
+        """Chạy YOLO **toàn ảnh + trên nhiều Ô cắt** rồi gộp NMS (supervision).
 
-        Cực hợp ảnh AERIAL/top-down: xe/người nhỏ trong ảnh gốc trở nên to trong từng
-        ô nên detect tốt hơn hẳn. Chậm hơn ~số ô lần.
+        - Ô cắt (InferenceSlicer): bắt vật NHỎ/ở xa (aerial, đám đông xa) — nhỏ trong
+          ảnh gốc nhưng to trong từng ô.
+        - Toàn ảnh: bắt vật TO ở gần (tiling thuần dễ cắt đôi vật lớn hơn 1 ô).
+        Gộp 2 nguồn + NMS → phủ cả gần lẫn xa. Chậm hơn ~(số ô + 1) lần.
         """
         import supervision as sv
 
@@ -149,10 +151,14 @@ class UltralyticsYoloDetector:
                 self._slicer = sv.InferenceSlicer(
                     callback=_cb, slice_wh=wh, overlap_ratio_wh=(0.2, 0.2))
 
-        det = self._slicer(frame)
+        full = self._model(frame, conf=self.confidence, iou=self.iou,
+                           imgsz=self.imgsz, verbose=False)[0]
+        det = sv.Detections.merge([sv.Detections.from_ultralytics(full), self._slicer(frame)])
+        if len(det):
+            det = det.with_nms(threshold=self.iou)
+
         dets: List[Detection] = []
-        n = len(det)
-        for i in range(n):
+        for i in range(len(det)):
             name = self._names[int(det.class_id[i])]
             if want and name not in want:
                 continue
