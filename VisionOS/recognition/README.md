@@ -248,7 +248,11 @@ Downloader hỗ trợ 3 nguồn: `asset` (supervision, hash-check), `url` (.mp4 
 `pexels_id` (tự dò hậu tố chất lượng). Thêm/sửa kịch bản trong
 `recognition/video_catalog.py` — chỉ cần thêm 1 `VideoScenario`.
 
-Trên Kaggle: mở **`run_scenarios_kaggle.ipynb`** rồi Run All (GPU + Internet).
+**Notebook chạy được cả Google Colab lẫn Kaggle** — mở `run_scenarios_colab.ipynb`
+(Colab) hoặc `run_scenarios_kaggle.ipynb` (Kaggle); cả hai giống nhau, **cell 1 tự nhận
+diện** môi trường và đặt thư mục làm việc (`/content` cho Colab, `/kaggle/working` cho
+Kaggle). Nhớ **bật GPU** trước: Colab → *Runtime → Change runtime type → T4 GPU*;
+Kaggle → *Settings → Accelerator → GPU*. Rồi Run All.
 
 ---
 
