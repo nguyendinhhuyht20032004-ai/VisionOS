@@ -108,10 +108,16 @@ def test_by_task_filter():
 
 
 def test_conveyor_line_vertical_vehicles_horizontal():
+    # Vạch user vẽ tay có thể hơi nghiêng → kiểm tra ĐỊNH HƯỚNG (dọc-ish / ngang-ish),
+    # không đòi hỏi x/y bằng tuyệt đối.
     conv = by_task("conveyor")[0].scenario
-    assert conv.line_start_pct[0] == conv.line_end_pct[0]      # DỌC: cùng x
+    dx = abs(conv.line_start_pct[0] - conv.line_end_pct[0])
+    dy = abs(conv.line_start_pct[1] - conv.line_end_pct[1])
+    assert dx < dy, "vạch chuyền phải DỌC-ish (vật chạy ngang)"
     veh = by_task("vehicles")[0].scenario
-    assert veh.line_start_pct[1] == veh.line_end_pct[1]        # NGANG: cùng y
+    vdx = abs(veh.line_start_pct[0] - veh.line_end_pct[0])
+    vdy = abs(veh.line_start_pct[1] - veh.line_end_pct[1])
+    assert vdy < vdx, "vạch xe phải NGANG-ish (xe chạy dọc)"
 
 
 def test_supervision_and_pexels_both_used():

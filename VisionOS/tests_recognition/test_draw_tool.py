@@ -70,6 +70,7 @@ def test_gallery_embeds_multiple_frames_and_nav(tmp_path, monkeypatch):
     class _V:
         def __init__(self, k):
             self.scenario = _SC(k)
+            self.filename = k + ".mp4"       # gallery gộp theo filename → cần thuộc tính này
 
     monkeypatch.setattr(D, "_find", lambda n: _V(n))
     monkeypatch.setattr(VC, "download_video", lambda v, *a, **k: str(vid))

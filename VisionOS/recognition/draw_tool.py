@@ -374,28 +374,31 @@ _GALLERY = r"""
 def draw_gallery(names=None, max_width: int = 900, target_index: int = 50) -> str:
     """1 canvas + nút ◀/▶ để CHUYỂN qua nhiều video trong CÙNG 1 ô (giải bài 'sang ảnh khác').
 
-    ``names`` = list tên/khoá video (mặc định vài video chính); ``"all"`` = mọi kịch bản.
-    Mỗi video giữ riêng vạch/vùng; ô chữ xuất toạ độ % của TẤT CẢ, gắn theo tên video.
+    ``names`` = list tên/khoá video. Mặc định (None) hoặc ``"all"`` = **MỌI video**
+    (gồm cả XE), gộp theo FILE nên mỗi video CHỈ hiện 1 lần (subway/siêu thị/quảng
+    trường tuy có nhiều kịch bản line+zone vẫn chỉ 1 frame). Mỗi video giữ riêng
+    vạch/vùng; ô chữ xuất toạ độ % của TẤT CẢ, gắn theo tên video.
     """
     import json
 
     from .video_catalog import CATALOG, download_video
 
-    if names is None:
-        names = ["walk", "subway", "store", "square", "milk", "conv_pkg"]
+    if names is None or names == "all":
+        # MỌI video, gộp theo file (1 key đại diện/1 file) → có đủ xe, không lặp frame.
+        seen, names = set(), []
+        for v in CATALOG:
+            if v.filename not in seen:
+                seen.add(v.filename)
+                names.append(v.scenario.key)
     elif isinstance(names, str):
-        if names == "all":
-            seen, names = set(), []
-            for v in CATALOG:
-                if v.scenario.key not in seen:
-                    seen.add(v.scenario.key)
-                    names.append(v.scenario.key)
-        else:
-            names = [names]
+        names = [names]
 
-    frames = []
+    frames, seen_file = [], set()
     for n in names:
         v = _find(n)
+        if v.filename in seen_file:      # tránh lặp nếu list có 2 key cùng 1 file
+            continue
+        seen_file.add(v.filename)
         path = download_video(v)
         uri, w, h = frame_data_uri(path, target_index, v.scenario.resolution)
         frames.append({"name": v.scenario.key, "uri": uri, "w": w, "h": h})
