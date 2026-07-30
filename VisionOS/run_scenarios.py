@@ -477,11 +477,11 @@ def run(args) -> int:
             rows.append(row)
             tag = f"[{group}] " if group else ""
             if sc.counting_type == "line":
-                print(f"  · {tag}query={q!r} → IN={r.get('IN')} OUT={r.get('OUT')} "
-                      f"total={r.get('total')} det/frame={r.get('det/frame')} fps={r.get('fps')}")
+                print(f"  · {tag}query={q!r} → QUA VẠCH={r.get('total')} (IN {r.get('IN')}/OUT {r.get('OUT')}) "
+                      f"· TỔNG thấy≈{r.get('tracks')} · det/frame={r.get('det/frame')} fps={r.get('fps')}")
             else:
-                print(f"  · {tag}query={q!r} → trong_vùng={r.get('trong_vùng')} đỉnh={r.get('đỉnh_vùng')} "
-                      f"det/frame={r.get('det/frame')} fps={r.get('fps')}")
+                print(f"  · {tag}query={q!r} → TRONG VÙNG={r.get('trong_vùng')} đỉnh={r.get('đỉnh_vùng')} "
+                      f"· TỔNG thấy≈{r.get('tracks')} · det/frame={r.get('det/frame')} fps={r.get('fps')}")
 
     # Tách scorecard theo kiểu đếm (line/zone khác cột) cho gọn.
     line_rows = [r for r in rows if r.get("type") == "line"]
@@ -493,6 +493,12 @@ def run(args) -> int:
     if zone_rows:
         print("\n▶ Đếm trong VÙNG (occupancy):")
         print_scorecard([{k: v for k, v in r.items() if k != "type"} for r in zone_rows])
+    print("\nℹ️  ĐỌC CỘT (quan trọng — đừng nhầm):")
+    print("   • IN/OUT/total = số ĐI QUA VẠCH (mỗi xe/người đếm 1 lần khi CẮT vạch) → 'đếm vào/ra'.")
+    print("   • tracks = TỔNG số đối tượng KHÁC NHAU thấy trong video (≈ 'có bao nhiêu xe/người';")
+    print("     hơi DƯ do track đứt-nối). ĐÂY mới là con số 'nhiều xe' bạn muốn, KHÔNG phải total.")
+    print("   • trong_vùng/đỉnh_vùng = số đang Ở TRONG vùng (hiện tại / đông nhất cùng lúc).")
+    print("   • det/frame = TB vật/khung — đo SỨC DETECT. Cao = model nhận diện tốt.")
     if args.save_dir:
         print(f"\n🎥 Video output đã lưu trong: {args.save_dir}/<task>/")
     return 0
