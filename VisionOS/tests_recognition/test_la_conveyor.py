@@ -86,13 +86,21 @@ def test_nms_trivial_sizes():
 # --------------------------------------------------------------------------- #
 # Scenario băng chuyền
 # --------------------------------------------------------------------------- #
-def test_build_scenario_is_vertical_and_valid():
-    scn = R.build_scenario(640, 360, 0.5, "CENTER", "object", 30)
+def test_build_scenario_defaults_vertical():
+    scn = R.build_scenario(640, 360, "object", 30)
     scn.validate()                              # không raise
-    assert scn.line.orientation == "vertical"   # sản phẩm chạy ngang → vạch dọc
+    assert scn.line.orientation == "vertical"   # mặc định: hàng chạy ngang → vạch dọc
     assert scn.resolution == (640, 360)
     assert scn.prompt == "object"
     assert scn.max_frames == 30
+
+
+def test_build_scenario_horizontal_line():
+    # vật đi XUỐNG (box/cà chua về phía camera) → vạch NGANG
+    scn = R.build_scenario(640, 360, "a tomato", 20, orient="horizontal", line_pos=0.72)
+    scn.validate()
+    assert scn.line.orientation == "horizontal"
+    assert abs(scn.line.position - 0.72) < 1e-9
 
 
 # --------------------------------------------------------------------------- #
@@ -108,11 +116,32 @@ def test_fakedet_box_moves_left_to_right():
 
 def test_selftest_pipeline_counts_a_crossing():
     n = 26
-    scn = R.build_scenario(640, 360, 0.5, "CENTER", "object", n)
+    scn = R.build_scenario(640, 360, "object", n)
     pipe = CountingPipeline(R._FakeDet(n), scn, resize=False)
     res = pipe.run(R._blank_frames(n, 640, 360), max_frames=n)
     assert res.frames == n
     assert res.total_crossings >= 1              # vật đã cắt vạch dọc
+
+
+def test_run_video_counts_with_fake_detector(monkeypatch):
+    # dùng lại API run_video (notebook gọi) — thay iter_video_frames bằng frame giả
+    # để không phụ thuộc codec/video thật.
+    frames = [np.zeros((180, 320, 3), dtype="uint8") for _ in range(12)]
+    monkeypatch.setattr(R, "iter_video_frames", lambda _p: iter(frames))
+    res = R.run_video(R._FakeDet(12), "dummy.mp4", "object",
+                      proc_width=320, max_frames=12, stride=1)
+    assert res.frames == 12
+    assert res.total_crossings >= 1
+
+
+def test_run_video_saves_annotation(tmp_path, monkeypatch):
+    frames = [np.zeros((180, 320, 3), dtype="uint8") for _ in range(12)]
+    monkeypatch.setattr(R, "iter_video_frames", lambda _p: iter(frames))
+    out = str(tmp_path / "annot.jpg")
+    R.run_video(R._FakeDet(12), "dummy.mp4", "object",
+                proc_width=320, max_frames=12, stride=1, save_annotated=out)
+    import os
+    assert os.path.exists(out) and os.path.getsize(out) > 0
 
 
 def test_main_selftest_returns_zero():

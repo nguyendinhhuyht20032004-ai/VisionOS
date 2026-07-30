@@ -153,13 +153,20 @@ def build_fast_detector(model_id: str, max_new_tokens: int, iou: float, max_boxe
 # --------------------------------------------------------------------------- #
 # Scenario băng chuyền (vạch DỌC — sản phẩm chạy ngang cắt qua).
 # --------------------------------------------------------------------------- #
-def build_scenario(proc_w: int, proc_h: int, line_x: float, anchor: str,
-                   prompt: str, max_frames: int) -> Scenario:
+def build_scenario(proc_w: int, proc_h: int, prompt: str, max_frames: int,
+                   orient: str = "vertical", line_pos: float = 0.5,
+                   anchor: str = "CENTER") -> Scenario:
+    """Dựng scenario đếm.
+
+    orient="vertical"  → vạch DỌC (hàng chạy NGANG trên chuyền cắt qua).
+    orient="horizontal"→ vạch NGANG (vật đi XUỐNG/lên cắt qua — vd box/cà chua
+                         trôi về phía camera).
+    """
     scn = Scenario(
         key="la_conveyor",
-        title="LA-3B · đếm sản phẩm băng chuyền",
+        title="LA-3B · đếm sản phẩm",
         prompt=prompt,
-        line=LineConfig(orientation="vertical", position=line_x, anchor=anchor),
+        line=LineConfig(orientation=orient, position=line_pos, anchor=anchor),
         resolution=(proc_w, proc_h),
         in_label="Qua vạch",
         out_label="Ngược",
@@ -168,6 +175,54 @@ def build_scenario(proc_w: int, proc_h: int, line_x: float, anchor: str,
     )
     scn.validate()
     return scn
+
+
+def _annotate(frame_bgr, sv_d, pipe):
+    """Vẽ vạch + box + bộ đếm lên 1 frame (BGR) — để xem model bắt gì."""
+    import cv2
+
+    img = frame_bgr.copy()
+    h, w = img.shape[:2]
+    (sx, sy), (ex, ey) = pipe.scenario.line.points(w, h)
+    cv2.line(img, (sx, sy), (ex, ey), (0, 0, 255), 2)
+    xyxy = getattr(sv_d, "xyxy", [])
+    for box in xyxy:
+        x1, y1, x2, y2 = (int(v) for v in box)
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    lz = pipe.line_zone
+    cv2.putText(img, f"IN {int(lz.in_count)}  OUT {int(lz.out_count)}  box {len(xyxy)}",
+                (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    return img
+
+
+def run_video(detector, video, query, *, orient="vertical", line_pos=0.5,
+              anchor="CENTER", proc_width=640, max_frames=30, stride=3,
+              save_annotated=None):
+    """Chạy 1 (video, query) → ``CountResult``. Model nạp SẴN ở ngoài để DÙNG LẠI
+    cho nhiều video/query (tránh nạp lại 6GB mỗi lần — đây là mấu chốt tốc độ).
+
+    save_annotated: path .jpg → lưu frame NHIỀU box nhất (đã vẽ vạch + box) để xem.
+    """
+    proc_h = max(2, round(proc_width * 9 / 16))
+    scn = build_scenario(proc_width, proc_h, query, max_frames,
+                         orient=orient, line_pos=line_pos, anchor=anchor)
+    pipe = CountingPipeline(detector, scn, resize=True)
+    best = {"n": -1, "img": None}
+
+    def cb(frame_bgr, sv_d, _pipe):
+        if len(sv_d) > best["n"]:
+            best["n"] = len(sv_d)
+            best["img"] = _annotate(frame_bgr, sv_d, _pipe)
+
+    res = pipe.run(strided(iter_video_frames(video), stride),
+                   max_frames=max_frames, on_frame=cb if save_annotated else None)
+    if save_annotated is not None and best["img"] is not None:
+        import cv2
+
+        d = os.path.dirname(os.path.abspath(save_annotated))
+        os.makedirs(d, exist_ok=True)
+        cv2.imwrite(save_annotated, best["img"])
+    return res
 
 
 # --------------------------------------------------------------------------- #
@@ -334,8 +389,11 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--iou", type=float, default=0.5, help="ngưỡng IoU khử box trùng")
     ap.add_argument("--max-boxes", type=int, default=60, help="trần số box/frame sau NMS")
     # vạch
-    ap.add_argument("--line-x", type=float, default=0.5, help="vị trí vạch dọc (0..1)")
+    ap.add_argument("--orient", choices=["vertical", "horizontal"], default="vertical",
+                    help="hướng vạch: dọc (hàng chạy ngang) | ngang (vật đi xuống/lên)")
+    ap.add_argument("--line-pos", type=float, default=0.5, help="vị trí vạch 0..1")
     ap.add_argument("--anchor", default="CENTER", help="điểm neo xét cắt vạch")
+    ap.add_argument("--save-dir", default=None, help="lưu frame annotate mỗi lượt (JPG)")
     # model
     ap.add_argument("--model", default="nvidia/LocateAnything-3B")
     return ap
@@ -349,7 +407,7 @@ def main(argv=None):
     # ---- SELF-TEST (không GPU) ----
     if args.selftest:
         n = 26
-        scn = build_scenario(proc_w, proc_h, args.line_x, args.anchor, "object", n)
+        scn = build_scenario(proc_w, proc_h, "object", n, orient="vertical", line_pos=0.5)
         pipe = CountingPipeline(_FakeDet(n), scn, resize=False)
         res = pipe.run(_blank_frames(n, proc_w, proc_h), max_frames=n)
         print_header()
@@ -393,11 +451,16 @@ def main(argv=None):
     t_all = time.time()
     for v in videos:
         for _group, q in pairs:
-            scn = build_scenario(proc_w, proc_h, args.line_x, args.anchor, q, args.max_frames)
-            pipe = CountingPipeline(detector, scn, resize=True)
+            save = None
+            if args.save_dir:
+                stem = os.path.splitext(os.path.basename(v))[0]
+                qsafe = "".join(c if c.isalnum() else "_" for c in q)[:24]
+                save = os.path.join(args.save_dir, f"{stem}__{qsafe}.jpg")
             t0 = time.time()
-            res = pipe.run(strided(iter_video_frames(v), args.stride),
-                           max_frames=args.max_frames)
+            res = run_video(detector, v, q, orient=args.orient, line_pos=args.line_pos,
+                            anchor=args.anchor, proc_width=proc_w,
+                            max_frames=args.max_frames, stride=args.stride,
+                            save_annotated=save)
             print_row(v, q, res, time.time() - t0)
     print("-" * 92)
     print(f"Xong {n_runs} lượt trong {time.time() - t_all:.0f}s. "
