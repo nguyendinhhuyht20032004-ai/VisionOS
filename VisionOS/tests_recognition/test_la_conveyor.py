@@ -83,6 +83,22 @@ def test_nms_trivial_sizes():
     assert R.nms(one) == one
 
 
+def test_drop_full_frame_removes_whole_image_box():
+    # box phủ ~cả khung (960x540) bị bỏ; box vật nhỏ giữ lại
+    full = _det(0, 0, 960, 540)
+    small = _det(100, 100, 180, 180)
+    kept = R.drop_full_frame([full, small], 960, 540, max_frac=0.85)
+    assert small in kept and full not in kept
+    assert len(kept) == 1
+
+
+def test_drop_full_frame_keeps_large_but_not_whole():
+    # box lớn (~50% khung) vẫn giữ; chỉ bỏ cái ~cả khung
+    half = _det(0, 0, 480, 540)                 # 50% diện tích
+    kept = R.drop_full_frame([half], 960, 540, max_frac=0.85)
+    assert kept == [half]
+
+
 # --------------------------------------------------------------------------- #
 # Scenario băng chuyền
 # --------------------------------------------------------------------------- #

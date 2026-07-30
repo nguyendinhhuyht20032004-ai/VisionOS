@@ -182,23 +182,25 @@ class LocateAnythingDetector:
                       torch_dtype=self.dtype, attn_implementation=attn_impl)
         use_gpu = torch.cuda.is_available() and not self._cpu_debug
         self.model = None
-        # PHƯƠNG ÁN DỰ PHÒNG (opt-in LA_DEVICE_MAP=1): nạp THẲNG lên cuda:0 (device_map=
-        # {"":0}, KHÔNG split) — đỉnh VRAM thấp nhất. Mặc định TẮT vì đường CPU→.to là
-        # đường generate() ĐÃ chạy được (benchmark Kaggle); chỉ bật khi vẫn OOM lúc nạp.
-        if use_gpu and os.environ.get("LA_DEVICE_MAP") == "1":
+        # NẠP như notebook Kaggle ĐÃ CHẠY ĐƯỢC: device_map (mặc định "auto") → nạp THẲNG
+        # lên GPU ở float16, KHÔNG qua CPU rồi .to("cuda"). Đây là chống-OOM chính: đường
+        # CPU→.to hay dính float32 (~14GB) → OOM trên T4. Đặt LA_DEVICE_MAP="" để TẮT
+        # (quay lại CPU→.to); ="0"/"cuda:0" để ép DỒN 1 GPU (khi máy có 2 GPU mà generate lỗi split).
+        dm = os.environ.get("LA_DEVICE_MAP", "auto")
+        if use_gpu and dm:
             torch.cuda.empty_cache()
+            device_map = {"": 0} if dm in ("0", "cuda:0", "single") else dm
             try:
                 self.model = AutoModel.from_pretrained(
-                    self.model_dir, low_cpu_mem_usage=True, device_map={"": 0}, **common)
-                print("✅ Nạp thẳng lên cuda:0 (device_map, float16).")
-            except Exception as e:  # noqa: BLE001
+                    self.model_dir, low_cpu_mem_usage=True, device_map=device_map, **common)
+                print(f"✅ Nạp lên GPU (device_map={device_map!r}, float16) — như notebook chạy được.")
+            except Exception as e:  # noqa: BLE001 — bản cũ/không accelerate → nạp CPU rồi .to
                 print(f"ℹ️  device_map lỗi ({type(e).__name__}); nạp CPU rồi .to(float16).")
                 self.model = None
         if self.model is None:
             self.model = AutoModel.from_pretrained(self.model_dir, **common)
             if use_gpu:
-                # Dọn cache + ÉP float16 khi lên GPU. Nếu model lỡ nạp float32 (torch_dtype
-                # không được áp), .to nguyên float32 = ~14GB → OOM T4; ép float16 → ~7GB.
+                # Dự phòng: nạp CPU rồi ÉP float16 khi lên GPU (nếu model lỡ float32 → tránh OOM).
                 torch.cuda.empty_cache()
                 self.model = self.model.to(device="cuda:0", dtype=self.dtype)
 

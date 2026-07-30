@@ -101,6 +101,13 @@ def _iou(a: Sequence[float], b: Sequence[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def drop_full_frame(dets: List[Detection], w: int, h: int, max_frac: float = 0.85) -> List[Detection]:
+    """Bỏ box phủ ~CẢ khung ảnh. LocateAnything hay trả 1 box = TOÀN ảnh khi không định vị
+    được từng vật → phải loại, nếu không sẽ 'đếm cả khung' thay vì đếm vật."""
+    fa = float(w * h) or 1.0
+    return [d for d in dets if _area(d.bbox) <= max_frac * fa]
+
+
 def nms(dets: List[Detection], iou_thr: float = 0.5, max_boxes: int = 60) -> List[Detection]:
     """Gộp box chồng nhau (IoU≥``iou_thr``, giữ box lớn hơn) + chặn trần số box.
 
@@ -138,6 +145,8 @@ class FastLA:
 
     def detect_frame(self, frame_bgr, prompt: str):
         dets, raw = self._impl.detect_frame(frame_bgr, prompt)
+        h, w = frame_bgr.shape[:2]
+        dets = drop_full_frame(dets, w, h)          # bỏ box 'cả khung ảnh'
         return nms(dets, self.iou, self.max_boxes), raw
 
 

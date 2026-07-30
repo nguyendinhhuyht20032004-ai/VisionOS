@@ -203,6 +203,13 @@ def _ensure_locate_deps() -> None:
         pass
 
 
+def _drop_full_frame(dets, w: int, h: int, max_frac: float = 0.85):
+    """Bỏ box phủ ~CẢ khung ảnh — LocateAnything hay trả 1 box = TOÀN ảnh khi không định
+    vị được từng vật (→ 'đếm cả khung' thay vì đếm vật). Loại trước khi NMS/track."""
+    fa = float(w * h) or 1.0
+    return [d for d in dets if d.bbox.area <= max_frac * fa]
+
+
 def _dedup_dets(dets, iou_thr: float = 0.5, max_boxes: int = 60):
     """Khử box trùng (NMS class-agnostic) + chặn trần số box.
 
@@ -257,6 +264,9 @@ class LocateAnythingDetector:
             )
             for d in la_dets
         ]
+        # BỎ box 'CẢ KHUNG ẢNH' (LA hay trả 1 box = toàn ảnh khi không định vị được vật).
+        h, w = frame.shape[:2]
+        dets = _drop_full_frame(dets, w, h)
         # KHỬ BOX TRÙNG (NMS): LocateAnything greedy-decode dễ BÙNG NỔ box lặp
         # (100+/frame) → tracker loạn ID → KHÔNG đếm được (IN/OUT=0). Gộp box chồng
         # nhau (IoU≥0.5) rồi chặn trần để mỗi vật chỉ còn 1 box → track ổn định.
