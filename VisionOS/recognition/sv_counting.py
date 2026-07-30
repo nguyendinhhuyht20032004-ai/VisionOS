@@ -87,6 +87,22 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None):
             poly = np.array([[int(x), int(y)] for x, y in z.to_pixels(w, h)], dtype=int)
             polys.append(_make_polygon_zone(sv, poly, w, h))
 
+    # Annotator supervision (box bo góc + nhãn + vệt + bộ đếm trên vạch/vùng) — dựng
+    # 1 lần (TraceAnnotator tích luỹ vệt qua frame). Lỗi API → rơi về vẽ cv2.
+    annos = None
+    if writer is not None:
+        try:
+            annos = {
+                "box": sv.RoundBoxAnnotator(color_lookup=sv.ColorLookup.TRACK, thickness=2),
+                "label": sv.LabelAnnotator(color_lookup=sv.ColorLookup.TRACK, text_scale=0.45),
+                "trace": sv.TraceAnnotator(color_lookup=sv.ColorLookup.TRACK, thickness=2, trace_length=30),
+                "line": sv.LineZoneAnnotator(thickness=2, text_scale=0.7) if line is not None else None,
+                "zones": [sv.PolygonZoneAnnotator(zone=pz, color=sv.Color.GREEN, thickness=2)
+                          for pz in polys],
+            }
+        except Exception:  # noqa: BLE001
+            annos = None
+
     res = CountResult(scenario_key=scenario.key, counting_type=scenario.counting_type,
                       in_label=scenario.in_label, out_label=scenario.out_label)
     seen: set = set()
@@ -119,9 +135,42 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None):
         res.frames += 1
         res.unique_tracks = len(seen)
         if writer is not None:
-            writer.write(_draw(frame, det, scenario, line, zones_px, res, w, h, cv2, np))
+            out = None
+            if annos is not None:
+                try:
+                    out = _annotate_sv(frame, det, annos, line, res, w, h, cv2, sv)
+                except Exception:  # noqa: BLE001 — annotator lỗi → vẽ cv2
+                    out = None
+            writer.write(out if out is not None
+                         else _draw(frame, det, scenario, line, zones_px, res, w, h, cv2, np))
     res.elapsed_s = time.time() - t0
     return res
+
+
+def _annotate_sv(frame, det, annos, line, res, w, h, cv2, sv):
+    """Vẽ output bằng annotator supervision (đẹp, đúng chất sv) + banner tóm tắt."""
+    import numpy as np
+
+    f = frame.copy()
+    for za in annos["zones"]:
+        f = za.annotate(scene=f)                       # vùng + số trong vùng
+    if len(det):
+        f = annos["trace"].annotate(f, det)            # vệt chuyển động
+        f = annos["box"].annotate(f, det)              # box bo góc theo track
+        labels = ([f"#{int(t)}" for t in det.tracker_id]
+                  if det.tracker_id is not None else None)
+        f = annos["label"].annotate(f, det, labels=labels)
+    if line is not None and annos["line"] is not None:
+        f = annos["line"].annotate(f, line)            # bộ đếm in/out trên vạch
+    # Banner tóm tắt trên cùng (ASCII).
+    if line is not None:
+        txt = f"{res.in_label}:{res.in_count}  {res.out_label}:{res.out_count}  frame:{res.frames}"
+    else:
+        txt = f"trong vung:{res.zone_current}  dinh:{res.zone_peak}  frame:{res.frames}"
+    f = np.ascontiguousarray(f)
+    cv2.rectangle(f, (0, 0), (w, 28), (0, 0, 0), -1)
+    cv2.putText(f, _ascii(txt), (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    return f
 
 
 def _draw(frame, det, scenario, line, zones_px, res, w, h, cv2, np):
