@@ -244,10 +244,17 @@ viết (thuần Python, test CPU): `--engine builtin`. Cả hai trả cùng `Cou
 sót → model mạnh hơn: `--yolo-weights yolov8l.pt` / `yolov8x.pt` (chậm hơn) hoặc hạ
 `--confidence 0.2`. Chỉnh nhanh qua env: `YOLO_WEIGHTS`, `YOLO_IMGSZ`, `YOLO_CONF`.
 
-**Ảnh AERIAL/top-down (xe nhìn từ trên rất nhỏ)?** Thêm **`--tile`** — cắt ảnh thành ô
-640px, chạy YOLO từng ô rồi gộp NMS (supervision `InferenceSlicer`). Xe nhỏ trong ảnh
-gốc trở nên to trong từng ô → **det/frame tăng mạnh**. Chậm hơn ~số ô lần. Chỉnh ô qua
+**Ảnh AERIAL/top-down (xe nhìn từ trên rất nhỏ)?** Thêm **`--tile`** — YOLO chạy **toàn
+ảnh + nhiều ô 640px** rồi gộp NMS (supervision `InferenceSlicer`): vật nhỏ to lên trong
+từng ô, vật to ở gần vẫn bắt bằng lượt toàn ảnh. Chậm hơn ~số ô lần. Chỉnh ô qua
 `YOLO_TILE_WH` / `YOLO_TILE_OVERLAP`.
+
+**Giữ chi tiết (đừng hạ res):** `--proc-width 1920` xử lý ở độ phân giải cao (thay vì
+hạ về scenario) → detect nét hơn; vạch/vùng theo %% nên vẫn khớp. Bản mạnh nhất cho cảnh
+khó: `--yolo-weights yolo11x.pt --tile --proc-width 1920 --confidence 0.15` (chậm).
+
+Video output ghi đúng **FPS nguồn** (chia cho `--stride`) nên không còn phát chậm như
+slow-motion.
 
 Bài **NGƯỜI** tách 2 kiểu đếm (scorecard in riêng): **cắt VẠCH** (vào/ra) và
 **đếm VÙNG** (occupancy — hợp cảnh người đi lại lộn xộn như quảng trường). Video

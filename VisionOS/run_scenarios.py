@@ -389,6 +389,28 @@ def run(args) -> int:
             print(f"  ❌ tải video lỗi: {e}")
             continue
 
+        # Đọc FPS + kích thước gốc: fps → ghi output đúng tốc độ (khỏi slow-motion);
+        # dims → --proc-width cho xử lý ở ĐỘ PHÂN GIẢI CAO (giữ chi tiết → detect tốt hơn).
+        src_fps, src_w, src_h = 25.0, 0, 0
+        try:
+            import cv2 as _cv2
+
+            _c = _cv2.VideoCapture(path)
+            src_fps = _c.get(_cv2.CAP_PROP_FPS) or 25.0
+            src_w = int(_c.get(_cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            src_h = int(_c.get(_cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            _c.release()
+        except Exception:  # noqa: BLE001
+            pass
+        out_fps = max(1.0, src_fps / max(1, stride))   # bù frame bị bỏ bởi --stride
+        # Độ phân giải xử lý: mặc định theo scenario; --proc-width ép rộng hơn (giữ tỉ lệ).
+        proc_res = None
+        if args.proc_width and src_w and src_h:
+            pw = int(args.proc_width)
+            ph = int(round(pw * src_h / src_w))
+            proc_res = (pw - pw % 2, ph - ph % 2)      # chẵn cho codec
+            print(f"  🔎 xử lý ở {proc_res[0]}x{proc_res[1]} (gốc {src_w}x{src_h})")
+
         # Chọn danh sách prompt để test trên video này (DỄ→KHÓ).
         # Danh sách (nhóm, query) để test trên video này.
         if run_suite:
@@ -405,7 +427,8 @@ def run(args) -> int:
 
         for group, q in qpairs:
             # ÉP vạch/vùng theo tay (bạn xem video rồi đặt cho khớp hướng vật chạy).
-            sc = _apply_geom(replace_sc(v.scenario, prompt=q))
+            sc = _apply_geom(replace_sc(v.scenario, prompt=q,
+                                        **({"resolution": proc_res} if proc_res else {})))
             detector = get_detector(sc.model)
 
             # Lưu video output (vẽ vạch/vùng + box + số đếm) nếu có --save-dir.
@@ -417,7 +440,7 @@ def run(args) -> int:
                 os.makedirs(task_dir, exist_ok=True)
                 out_path = os.path.join(task_dir, f"{sc.key}__{_safe_name(q)}.mp4")
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(out_path, fourcc, 20.0, tuple(sc.resolution))
+                writer = cv2.VideoWriter(out_path, fourcc, out_fps, tuple(sc.resolution))
 
             result = None
             if use_sv:
@@ -510,6 +533,9 @@ def main() -> int:
     ap.add_argument("--tile", action="store_true",
                     help="TILED inference: cắt ảnh thành ô nhỏ chạy YOLO từng ô (hợp AERIAL/"
                          "top-down — xe nhỏ nhìn từ trên). Chậm hơn nhưng bắt vật nhỏ tốt hơn NHIỀU")
+    ap.add_argument("--proc-width", type=int, default=None,
+                    help="XỬ LÝ ở độ phân giải cao (rộng N px, giữ tỉ lệ) thay vì hạ về scenario "
+                         "→ GIỮ chi tiết, detect tốt hơn. VD 1920. (vạch/vùng theo %% nên vẫn khớp)")
     ap.add_argument("--only", default=None, help="lọc video theo từ khoá (tên/file/key), vd 'milk'")
     ap.add_argument("--line", default=None,
                     help="ÉP vạch đếm: 'x1,y1,x2,y2' theo %% (0-100). VD dọc lệch trái: '35,0,35,100'")
