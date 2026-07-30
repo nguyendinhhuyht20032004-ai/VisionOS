@@ -393,17 +393,33 @@ def draw_gallery(names=None, max_width: int = 900, target_index: int = 50) -> st
     elif isinstance(names, str):
         names = [names]
 
-    frames, seen_file = [], set()
+    frames, seen_file, skipped = [], set(), []
     for n in names:
-        v = _find(n)
+        try:
+            v = _find(n)
+        except KeyError:
+            skipped.append((str(n), "không có trong catalog"))
+            continue
         if v.filename in seen_file:      # tránh lặp nếu list có 2 key cùng 1 file
             continue
         seen_file.add(v.filename)
-        path = download_video(v)
-        uri, w, h = frame_data_uri(path, target_index, v.scenario.resolution)
+        try:
+            path = download_video(v)
+            uri, w, h = frame_data_uri(path, target_index, v.scenario.resolution)
+        except Exception as e:  # noqa: BLE001 — tải/đọc lỗi 1 video KHÔNG làm hỏng cả gallery
+            skipped.append((v.scenario.key, str(e).splitlines()[0][:70]))
+            print(f"  ⚠️  bỏ qua {v.scenario.key} (tải lỗi): {str(e).splitlines()[0][:70]}")
+            continue
         frames.append({"name": v.scenario.key, "uri": uri, "w": w, "h": h})
+        print(f"  ✅ {v.scenario.key}  ({v.filename})")
     if not frames:
-        raise ValueError("draw_gallery: danh sách video rỗng")
+        raise ValueError(
+            "draw_gallery: KHÔNG tải được video nào. "
+            + (f"Lỗi: {skipped}" if skipped else "")
+        )
+    print(f"🖼️  Gallery: {len(frames)} video"
+          + (f"  · ⚠️ bỏ qua {len(skipped)} (tải lỗi): {[k for k,_ in skipped]}" if skipped else "")
+          + "  — dùng nút ◀/▶ để chuyển ảnh.")
 
     return (_GALLERY
             .replace("__UID__", _next_uid())
