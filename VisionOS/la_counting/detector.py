@@ -178,20 +178,29 @@ class LocateAnythingDetector:
         # cho cc<8 (ở trên) + (2) safe_sdpa upcast f32 (dưới) → không crash cuBLAS.
         # Ép tay: LA_ATTN=flash_attention_2 nếu cài được flash-attn.
         attn_impl = os.environ.get("LA_ATTN", "sdpa")
-        self.model = AutoModel.from_pretrained(
-            self.model_dir,
-            config=config,
-            trust_remote_code=True,
-            torch_dtype=self.dtype,
-            attn_implementation=attn_impl,
-        )
-        if torch.cuda.is_available() and not self._cpu_debug:
-            # Dọn cache + ÉP đúng dtype (float16) khi đưa lên GPU. Một số bản
-            # transformers/model tuỳ biến KHÔNG áp torch_dtype khi nạp → model nằm
-            # float32 trên CPU; .to("cuda") nguyên float32 = ~14GB → OOM trên T4.
-            # .to(dtype=...) ép về float16 (~7GB) ngay lúc chuyển, tránh OOM.
+        common = dict(config=config, trust_remote_code=True,
+                      torch_dtype=self.dtype, attn_implementation=attn_impl)
+        use_gpu = torch.cuda.is_available() and not self._cpu_debug
+        self.model = None
+        # PHƯƠNG ÁN DỰ PHÒNG (opt-in LA_DEVICE_MAP=1): nạp THẲNG lên cuda:0 (device_map=
+        # {"":0}, KHÔNG split) — đỉnh VRAM thấp nhất. Mặc định TẮT vì đường CPU→.to là
+        # đường generate() ĐÃ chạy được (benchmark Kaggle); chỉ bật khi vẫn OOM lúc nạp.
+        if use_gpu and os.environ.get("LA_DEVICE_MAP") == "1":
             torch.cuda.empty_cache()
-            self.model = self.model.to(device="cuda:0", dtype=self.dtype)
+            try:
+                self.model = AutoModel.from_pretrained(
+                    self.model_dir, low_cpu_mem_usage=True, device_map={"": 0}, **common)
+                print("✅ Nạp thẳng lên cuda:0 (device_map, float16).")
+            except Exception as e:  # noqa: BLE001
+                print(f"ℹ️  device_map lỗi ({type(e).__name__}); nạp CPU rồi .to(float16).")
+                self.model = None
+        if self.model is None:
+            self.model = AutoModel.from_pretrained(self.model_dir, **common)
+            if use_gpu:
+                # Dọn cache + ÉP float16 khi lên GPU. Nếu model lỡ nạp float32 (torch_dtype
+                # không được áp), .to nguyên float32 = ~14GB → OOM T4; ép float16 → ~7GB.
+                torch.cuda.empty_cache()
+                self.model = self.model.to(device="cuda:0", dtype=self.dtype)
 
         # =========================================================================
         # CHUỖI VÁ SÂU DƯỚI ĐÂY (global SDPA / Linear / DecoderLayer / MLP) chỉ còn
