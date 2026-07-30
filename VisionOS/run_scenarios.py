@@ -507,6 +507,9 @@ def main() -> int:
                     help="model YOLO: yolov8m.pt (mặc định) / yolov8l.pt / yolov8x.pt (mạnh hơn, chậm hơn)")
     ap.add_argument("--imgsz", type=int, default=None,
                     help="cỡ ảnh suy luận YOLO (mặc định 960; 1280 bắt vật NHỎ/top-down tốt hơn)")
+    ap.add_argument("--tile", action="store_true",
+                    help="TILED inference: cắt ảnh thành ô nhỏ chạy YOLO từng ô (hợp AERIAL/"
+                         "top-down — xe nhỏ nhìn từ trên). Chậm hơn nhưng bắt vật nhỏ tốt hơn NHIỀU")
     ap.add_argument("--only", default=None, help="lọc video theo từ khoá (tên/file/key), vd 'milk'")
     ap.add_argument("--line", default=None,
                     help="ÉP vạch đếm: 'x1,y1,x2,y2' theo %% (0-100). VD dọc lệch trái: '35,0,35,100'")
@@ -526,6 +529,8 @@ def main() -> int:
         os.environ["YOLO_WEIGHTS"] = args.yolo_weights
     if args.imgsz:
         os.environ["YOLO_IMGSZ"] = str(args.imgsz)
+    if args.tile:
+        os.environ["YOLO_TILE"] = "1"
     return run(args)
 
 

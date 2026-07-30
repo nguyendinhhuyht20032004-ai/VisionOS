@@ -244,6 +244,11 @@ viết (thuần Python, test CPU): `--engine builtin`. Cả hai trả cùng `Cou
 sót → model mạnh hơn: `--yolo-weights yolov8l.pt` / `yolov8x.pt` (chậm hơn) hoặc hạ
 `--confidence 0.2`. Chỉnh nhanh qua env: `YOLO_WEIGHTS`, `YOLO_IMGSZ`, `YOLO_CONF`.
 
+**Ảnh AERIAL/top-down (xe nhìn từ trên rất nhỏ)?** Thêm **`--tile`** — cắt ảnh thành ô
+640px, chạy YOLO từng ô rồi gộp NMS (supervision `InferenceSlicer`). Xe nhỏ trong ảnh
+gốc trở nên to trong từng ô → **det/frame tăng mạnh**. Chậm hơn ~số ô lần. Chỉnh ô qua
+`YOLO_TILE_WH` / `YOLO_TILE_OVERLAP`.
+
 Bài **NGƯỜI** tách 2 kiểu đếm (scorecard in riêng): **cắt VẠCH** (vào/ra) và
 **đếm VÙNG** (occupancy — hợp cảnh người đi lại lộn xộn như quảng trường). Video
 output tô: **vàng = vạch**, **xanh mờ = vùng**, **xanh dương = box + #track-id**.
