@@ -90,12 +90,15 @@ def _draw_overlay(frame, tracked, pipe):
         cv2.fillPoly(ov, [pts], (0, 170, 0))
         cv2.addWeighted(ov, 0.25, img, 0.75, 0, img)
         cv2.polylines(img, [pts], True, GREEN, 2)
-    # Box + track id
+    # Box + NHÃN (tên lớp + track id) — vd 'car #3', 'truck #4'. (Trước đây chỉ '#id'
+    # → nếu engine sv rớt về bộ tự viết thì mất tên lớp. Giờ luôn có nhãn.)
     for d in tracked:
         x1, y1, x2, y2 = (int(v) for v in d.bbox.as_xyxy())
         cv2.rectangle(img, (x1, y1), (x2, y2), CYAN, 2)
         tid = d.track_id if d.track_id is not None else "?"
-        cv2.putText(img, f"#{tid}", (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, CYAN, 1)
+        nm = _ascii(getattr(d, "label", "") or "")
+        cv2.putText(img, f"{nm} #{tid}".strip(), (x1, max(12, y1 - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, CYAN, 1)
     # Banner số đếm (chuyển ASCII vì cv2.putText KHÔNG vẽ được dấu tiếng Việt → "V??o")
     r = pipe.result
     if pipe.line is not None:
