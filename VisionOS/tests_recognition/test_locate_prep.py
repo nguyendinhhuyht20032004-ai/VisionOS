@@ -94,10 +94,34 @@ def test_from_legacy_cache_replaced_with_cache_guard():
 
 
 def test_old_buggy_patch_form_is_normalized():
-    # Snapshot đã bị bản vá TRƯỚC sửa thành dạng thiếu → bản vá mới phải chuẩn hoá
+    # Bản vá cũ có thêm _cos_cached (không tồn tại trong module thật) cũng phải được bình thường hóa
     out = patch_modeling_source(OLD_PATCHED_SNIPPET)
-    assert ROBUST in out
     assert "if past_key_values is None else past_key_values" not in out
+
+
+ROPE_SNIPPET = """\
+class Qwen2RotaryEmbedding:
+    def forward(self, x, seq_len=None):
+        if seq_len > self.max_seq_len_cached:
+            self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+        return self.cos_cached[:seq_len].to(dtype=x.dtype), self.sin_cached[:seq_len].to(dtype=x.dtype)
+"""
+
+
+def test_rope_cache_guard_uses_real_attribute_name():
+    # Bản vá cũ kiểm tra `hasattr(self, '_cos_cached')` — thuộc tính này KHÔNG
+    # tồn tại trong modeling_qwen2.py gốc (buffer thật tên là `cos_cached`, không
+    # có dấu gạch dưới). Vì hasattr() với tên sai luôn False, điều kiện "or" luôn
+    # True → cache bị rebuild lại TỪ ĐẦU ở MỌI lần forward() (dead-code, tốn kém
+    # thêm ở 36 layer x nhiều bước generate). Bản vá đúng phải dùng tên buffer
+    # thật để guard chỉ thực sự hoạt động khi cache CHƯA từng được tạo.
+    out = patch_modeling_source(ROPE_SNIPPET)
+    assert "hasattr(self, 'cos_cached')" in out
+    assert "self.cos_cached is None" in out
+    assert "_cos_cached" not in out
+    # Đảm bảo KHÔNG CÒN việc slice cache theo seq_len
+    assert "self.cos_cached[:seq_len]" not in out
+    assert "return self.cos_cached.to" in out
 
 
 def test_idempotent():

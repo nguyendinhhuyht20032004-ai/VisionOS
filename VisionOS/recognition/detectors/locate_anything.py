@@ -96,7 +96,14 @@ def patch_modeling_source(code: str) -> str:
     # pattern gốc chỉ khớp 1 lần.
     code = code.replace(
         "if seq_len > self.max_seq_len_cached",
-        "if seq_len > self.max_seq_len_cached or not hasattr(self, '_cos_cached') or self._cos_cached is None",
+        "if seq_len > self.max_seq_len_cached or not hasattr(self, 'cos_cached') or self.cos_cached is None",
+    )
+    # Ngăn chặn slice RoPE cache theo seq_len. Trong hybrid decoding của Qwen2, 
+    # position_ids có thể lớn hơn seq_len (kv_seq_len). Slice sẽ làm cos[position_ids]
+    # đọc vượt quá mảng, gây hỏng CUDA stream và báo lỗi ở SDPA. Trả về full cache!
+    code = code.replace(
+        "return self.cos_cached[:seq_len].to(dtype=x.dtype), self.sin_cached[:seq_len].to(dtype=x.dtype)",
+        "return self.cos_cached.to(dtype=x.dtype), self.sin_cached.to(dtype=x.dtype)",
     )
     return code
 
@@ -196,6 +203,25 @@ def _ensure_locate_deps() -> None:
         pass
 
 
+def _dedup_dets(dets, iou_thr: float = 0.5, max_boxes: int = 60):
+    """Khử box trùng (NMS class-agnostic) + chặn trần số box.
+
+    LocateAnything hay sinh box lặp → gộp box chồng nhau (IoU≥``iou_thr``, giữ box
+    lớn hơn khi điểm bằng nhau) rồi cắt còn tối đa ``max_boxes`` (theo diện tích).
+    """
+    if len(dets) <= 1:
+        return dets
+    from ..evaluation import nms_dedup
+
+    boxes = [d.bbox for d in dets]
+    scores = [d.confidence for d in dets]
+    keep = nms_dedup(boxes, scores, iou_thr)
+    kept = [dets[i] for i in keep]
+    if len(kept) > max_boxes:
+        kept = sorted(kept, key=lambda d: d.bbox.area, reverse=True)[:max_boxes]
+    return kept
+
+
 class LocateAnythingDetector:
     """Wrapper open-vocab: đếm bất kỳ vật gì mô tả bằng ngôn ngữ tự nhiên."""
 
@@ -231,6 +257,10 @@ class LocateAnythingDetector:
             )
             for d in la_dets
         ]
+        # KHỬ BOX TRÙNG (NMS): LocateAnything greedy-decode dễ BÙNG NỔ box lặp
+        # (100+/frame) → tracker loạn ID → KHÔNG đếm được (IN/OUT=0). Gộp box chồng
+        # nhau (IoU≥0.5) rồi chặn trần để mỗi vật chỉ còn 1 box → track ổn định.
+        dets = _dedup_dets(dets, iou_thr=0.5, max_boxes=60)
         return DetectorResult(
             dets, raw=raw, latency_ms=(time.time() - t0) * 1000,
             model_name="LocateAnything-3B",
