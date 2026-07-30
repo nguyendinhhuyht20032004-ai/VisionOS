@@ -34,11 +34,17 @@ def _ascii(s: str) -> str:
 
 
 def _to_sv(dets, sv, np):
-    """List Detection (của mình) → sv.Detections (xyxy/confidence/class_id)."""
+    """List Detection (của mình) → sv.Detections (xyxy/confidence/class_id).
+
+    QUAN TRỌNG: báo confidence CAO (0.9) cho ByteTrack. Vì detector ĐÃ lọc theo
+    ``--confidence`` rồi → mọi box trả về đều là vật ta MUỐN bám. ByteTrack có ngưỡng
+    nội bộ (det_thresh ≈ activation+0.1, mặc định ~0.35) sẽ LOẠI vật conf thấp → không
+    tạo track → không vẽ/đếm. Nâng conf ở đây để ByteTrack bám MỌI vật đã detect.
+    """
     if not dets:
         return sv.Detections.empty()
     xyxy = np.array([[float(v) for v in d.bbox.as_xyxy()] for d in dets], dtype=float)
-    conf = np.array([float(d.confidence) for d in dets], dtype=float)
+    conf = np.full(len(dets), 0.9, dtype=float)
     cls = np.zeros(len(dets), dtype=int)          # đã lọc theo prompt → 1 lớp
     return sv.Detections(xyxy=xyxy, confidence=conf, class_id=cls)
 
@@ -51,11 +57,13 @@ def _make_polygon_zone(sv, poly, w, h):
         return sv.PolygonZone(polygon=poly, frame_resolution_wh=(w, h))  # bản cũ
 
 
-def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None):
+def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None, track_thresh=0.1):
     """Đếm 1 video bằng supervision. Trả về ``CountResult``.
 
     frames: iterable frame BGR (đã resize về ``resolution``).
     writer: nếu có (cv2.VideoWriter) → vẽ overlay + ghi video output.
+    track_thresh: ngưỡng KÍCH HOẠT track của ByteTrack — phải **≤ ngưỡng detect** kẻo vật
+      conf thấp (ĐÃ detect) bị ByteTrack loại → không vẽ/đếm. Mặc định 0.1 để bám MỌI vật.
     """
     import warnings
 
@@ -67,12 +75,20 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None):
         import supervision as sv
 
     w, h = resolution
-    # minimum_consecutive_frames=1 → xác nhận track NGAY frame đầu (vật xuất hiện ngắn
-    # vẫn đếm). Bản supervision cũ không có tham số này → fallback mặc định.
-    try:
-        tracker = sv.ByteTrack(minimum_consecutive_frames=1)
-    except TypeError:
-        tracker = sv.ByteTrack()
+    # track_activation_threshold THẤP (mặc định sv 0.25 — CAO hơn conf detect nên hay rớt
+    # vật) + minimum_consecutive_frames=1 (xác nhận ngay) + lost_track_buffer lớn (giữ
+    # track qua che khuất, ít đứt-nối ID). Fallback dần cho bản supervision cũ.
+    tracker = None
+    for kwargs in (
+        dict(track_activation_threshold=track_thresh, minimum_consecutive_frames=1, lost_track_buffer=60),
+        dict(track_thresh=track_thresh),
+        {},
+    ):
+        try:
+            tracker = sv.ByteTrack(**kwargs)
+            break
+        except TypeError:
+            continue
 
     line = None
     polys = []

@@ -449,7 +449,8 @@ def run(args) -> int:
                     from recognition.sv_counting import sv_run
 
                     result = sv_run(_frames_of(path, sc.resolution, stride=stride), sc, detector,
-                                    sc.resolution, max_frames=max_frames, writer=writer)
+                                    sc.resolution, max_frames=max_frames, writer=writer,
+                                    track_thresh=min(0.1, args.confidence))
                 except Exception as e:  # noqa: BLE001 — lỗi API supervision → rơi về builtin
                     print(f"  ⚠️  engine supervision lỗi ({e}); dùng bộ đếm tự viết.")
                     result = None
