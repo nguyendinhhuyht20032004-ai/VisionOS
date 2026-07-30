@@ -234,6 +234,11 @@ trên cùng 1 video, scorecard in mỗi vùng 1 dòng).
 `--max-frames`, `--stride`. Cần **bộ đầy đủ** thì dùng `--suite-full` (chậm). Nên chạy
 **1 video** với `--only` khi test open-vocab trên Colab (model 3B chậm ~1-2s/frame).
 
+**Engine đếm:** mặc định `--engine auto` dùng **supervision** (`ByteTrack` +
+`LineZone`/`PolygonZone`) nếu đã cài — tracker mạnh hơn `CentroidTracker` tự viết nên
+đếm **cắt vạch / chiếm vùng chính xác hơn**; overlay + số đếm vẽ bằng cv2. Ép bộ tự
+viết (thuần Python, test CPU): `--engine builtin`. Cả hai trả cùng `CountResult`/scorecard.
+
 **Nhận diện yếu (bỏ sót người/xe)?** Mặc định dùng **YOLOv8m** (mạnh hơn nano nhiều),
 `--confidence 0.25`, `--imgsz 960`. Vật NHỎ (xe top-down) → thêm `--imgsz 1280`. Vẫn
 sót → model mạnh hơn: `--yolo-weights yolov8l.pt` / `yolov8x.pt` (chậm hơn) hoặc hạ

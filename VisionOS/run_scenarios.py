@@ -328,6 +328,17 @@ def run(args) -> int:
     # bớt frame (stride) vì suite là "thử khả năng mô tả", không cần đếm cực chuẩn.
     max_frames = args.max_frames if args.max_frames is not None else (60 if run_suite else 300)
     stride = args.stride if args.stride is not None else (2 if run_suite else 1)
+
+    # Engine đếm: supervision (ByteTrack + LineZone/PolygonZone — chuẩn hơn) hay bộ tự viết.
+    if args.engine == "sv":
+        use_sv = True
+    elif args.engine == "builtin":
+        use_sv = False
+    else:  # auto: dùng supervision nếu cài được
+        from recognition.sv_counting import sv_available
+
+        use_sv = sv_available()
+    print(f"🧮 Engine đếm: {'supervision (ByteTrack)' if use_sv else 'tự viết (CentroidTracker)'}")
     if run_suite:
         print(f"⚡ Suite {'ĐẦY ĐỦ' if args.suite_full else 'LITE'}: "
               f"{args.suite_per_group} query/nhóm · max_frames={max_frames} · stride={stride} "
@@ -396,10 +407,9 @@ def run(args) -> int:
             # ÉP vạch/vùng theo tay (bạn xem video rồi đặt cho khớp hướng vật chạy).
             sc = _apply_geom(replace_sc(v.scenario, prompt=q))
             detector = get_detector(sc.model)
-            pipe = CountingPipeline(detector, sc)
 
             # Lưu video output (vẽ vạch/vùng + box + số đếm) nếu có --save-dir.
-            writer, out_path, on_frame = None, None, None
+            writer, out_path = None, None
             if args.save_dir:
                 import cv2
 
@@ -409,16 +419,31 @@ def run(args) -> int:
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                 writer = cv2.VideoWriter(out_path, fourcc, 20.0, tuple(sc.resolution))
 
-                def on_frame(frame, tracked, pipe, _w=writer):
-                    _w.write(_draw_overlay(frame, tracked, pipe))
+            result = None
+            if use_sv:
+                # ENGINE supervision (ByteTrack + LineZone/PolygonZone) — đếm chuẩn hơn.
+                try:
+                    from recognition.sv_counting import sv_run
 
-            pipe.run(_frames_of(path, sc.resolution, stride=stride),
-                     max_frames=max_frames, on_frame=on_frame)
+                    result = sv_run(_frames_of(path, sc.resolution, stride=stride), sc, detector,
+                                    sc.resolution, max_frames=max_frames, writer=writer)
+                except Exception as e:  # noqa: BLE001 — lỗi API supervision → rơi về builtin
+                    print(f"  ⚠️  engine supervision lỗi ({e}); dùng bộ đếm tự viết.")
+                    result = None
+            if result is None:
+                pipe = CountingPipeline(detector, sc)
+                on_frame = None
+                if writer is not None:
+                    def on_frame(frame, tracked, pipe, _w=writer):
+                        _w.write(_draw_overlay(frame, tracked, pipe))
+                pipe.run(_frames_of(path, sc.resolution, stride=stride),
+                         max_frames=max_frames, on_frame=on_frame)
+                result = pipe.result
             if writer is not None:
                 writer.release()
                 print(f"  🎥 lưu video: {out_path}")
 
-            r = pipe.result.as_row()
+            r = result.as_row()
             row = {"video": v.name, "task": v.task}
             if run_suite:
                 row["nhóm"] = group
@@ -475,6 +500,9 @@ def main() -> int:
     ap.add_argument("--confidence", type=float, default=0.25,
                     help="ngưỡng tin cậy YOLO (thấp = bắt nhiều hơn, mặc định 0.25)")
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
+    ap.add_argument("--engine", choices=["auto", "sv", "builtin"], default="auto",
+                    help="bộ đếm: sv = supervision (ByteTrack+LineZone, CHUẨN hơn), "
+                         "builtin = tự viết (CentroidTracker). auto = sv nếu cài được")
     ap.add_argument("--yolo-weights", default=None,
                     help="model YOLO: yolov8m.pt (mặc định) / yolov8l.pt / yolov8x.pt (mạnh hơn, chậm hơn)")
     ap.add_argument("--imgsz", type=int, default=None,
