@@ -13,10 +13,15 @@ Chỉ dùng module này khi thực sự chạy mô hình (Kaggle GPU / ``run_ben
 
 from __future__ import annotations
 
+import os
 import time
 from typing import List, Optional, Tuple
 
 from .parsing import Detection, parse_boxes
+
+# In log generate() chi tiết chỉ khi LA_DEBUG=1 (mặc định IM LẶNG — trước đây in
+# mỗi frame gây ngập output).
+_LA_DEBUG = bool(os.environ.get("LA_DEBUG"))
 
 __all__ = ["LocateAnythingDetector"]
 
@@ -327,10 +332,12 @@ class LocateAnythingDetector:
             for kw in attempts:
                 try:
                     output = self.model.generate(**kw)
-                    print(f"🔧 [DEBUG] generate() succeeded with keys: {list(kw.keys())}")
+                    if _LA_DEBUG:
+                        print(f"🔧 [DEBUG] generate() OK keys: {list(kw.keys())}")
                     break
                 except TypeError as e:  # kwarg không được hỗ trợ → thử rút gọn hơn
-                    print(f"🔧 [DEBUG] TypeError with keys {list(kw.keys())}: {e}")
+                    if _LA_DEBUG:
+                        print(f"🔧 [DEBUG] TypeError keys {list(kw.keys())}: {e}")
                     last_err = e
                     continue
                 except RuntimeError as e:
