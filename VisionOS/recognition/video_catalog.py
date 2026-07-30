@@ -221,7 +221,7 @@ CATALOG: List[VideoScenario] = [*_VEHICLES, *_CONVEYOR, *_PEOPLE]
 QUERY_SUITES = {
     "people": {
         "cơ bản": ["person", "a man", "a woman", "a child", "an elderly person"],
-        "màu/trang phục": ["a person in a white shirt", "a person in a red shirt",
+        "màu/trang phục": ["a person in a red shirt", "a person in a white shirt",
                            "a person wearing black", "a person in a jacket",
                            "a person wearing shorts"],
         "phụ kiện": ["a person wearing a backpack", "a person carrying a handbag",
@@ -238,7 +238,7 @@ QUERY_SUITES = {
     },
     "vehicles": {
         "loại xe": ["car", "truck", "bus", "motorcycle", "van", "bicycle"],
-        "màu": ["a white car", "a black car", "a red car", "a silver car"],
+        "màu": ["a red car", "a white car", "a black car", "a silver car"],
         "đặc điểm": ["a large truck", "a small car", "a delivery truck", "a taxi"],
         "hành động": ["a car turning", "a vehicle changing lanes", "a moving car",
                      "a parked car"],
@@ -261,11 +261,16 @@ QUERY_SUITES = {
 }
 
 
-def suite_for(task: str):
-    """Trả list (nhóm, query) của bộ suite cho một bài toán ('people'|'vehicles'|'conveyor')."""
+def suite_for(task: str, lite: bool = False, per_group: int = 2):
+    """Trả list (nhóm, query) của bộ suite cho một bài toán ('people'|'vehicles'|'conveyor').
+
+    ``lite=True`` chỉ lấy ``per_group`` query ĐẦU mỗi nhóm (đại diện — vd màu = đỏ/trắng)
+    để chạy NHANH trên Colab/Kaggle (session ngắn). Mặc định (lite=False) trả BỘ ĐẦY ĐỦ.
+    """
     out = []
     for group, qs in QUERY_SUITES.get(task, {}).items():
-        for q in qs:
+        picked = qs[: max(1, per_group)] if lite else qs
+        for q in picked:
             out.append((group, q))
     return out
 

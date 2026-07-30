@@ -192,9 +192,10 @@ python run_scenarios.py --task people --save-dir out_videos
 python run_scenarios.py --task conveyor --all-queries          # query gợi ý sẵn
 python run_scenarios.py --task conveyor --queries "cardboard box,a damaged package"
 
-# BỘ QUERY SUITE ĐẦY ĐỦ (nhiều trường hợp như bảng Excel) — phân theo nhóm:
-python run_scenarios.py --task conveyor --only milk --suite    # ~27 query/6 nhóm
-python run_scenarios.py --task people   --only walk --suite    # ~31 query/7 nhóm
+# QUERY SUITE — mặc định LITE (1-2 query/nhóm, NHANH, hợp Colab session ngắn):
+python run_scenarios.py --task conveyor --only pkg  --suite                 # ~12 query, ít frame
+python run_scenarios.py --task conveyor --only pkg  --suite --suite-per-group 1 --max-frames 40  # nhanh nhất
+python run_scenarios.py --task conveyor --only pkg  --suite-full            # bảng ĐẦY ĐỦ (~27 query, chậm)
 ```
 
 `--preview [thư_mục]` là bước **QUAN TRỌNG trước khi đếm**: nó lấy 1 frame CÓ vật của
@@ -223,9 +224,15 @@ trên cùng 1 video, scorecard in mỗi vùng 1 dòng).
 > tải = **bị ngắt giữa chừng, KHÔNG phải lỗi code** — chạy lại và chờ. Trên Kaggle nên
 > chạy cell "⏳ Tải model 3B TRƯỚC" một lần để kéo model về cache trước khi đếm.
 
-`--suite` chạy `QUERY_SUITES` (trong `recognition/video_catalog.py`) — mỗi bài toán
-có **20–30+ query phân nhóm**: cơ bản · màu/trang phục · phụ kiện · hành động/quan hệ ·
-đếm/nhóm · khó/phủ định · **tiếng Việt** (kiểm tra đa ngữ). Scorecard thêm cột **nhóm**.
+`--suite` chạy `QUERY_SUITES` (trong `recognition/video_catalog.py`) — mỗi bài toán có
+**20–30+ query phân nhóm**: cơ bản · màu/trang phục · phụ kiện · hành động/quan hệ ·
+đếm/nhóm · khó/phủ định · **tiếng Việt**. Scorecard thêm cột **nhóm**.
+
+**Tối ưu Colab/session ngắn:** `--suite` mặc định chạy bản **LITE** — chỉ **1-2 query
+đại diện mỗi nhóm** (vd màu = *đỏ/trắng*) + tự giảm `--max-frames` (60) và bỏ bớt frame
+(`--stride` 2) → nhanh hơn nhiều lần. Chỉnh: `--suite-per-group N` (1 = nhanh nhất),
+`--max-frames`, `--stride`. Cần **bộ đầy đủ** thì dùng `--suite-full` (chậm). Nên chạy
+**1 video** với `--only` khi test open-vocab trên Colab (model 3B chậm ~1-2s/frame).
 
 Bài **NGƯỜI** tách 2 kiểu đếm (scorecard in riêng): **cắt VẠCH** (vào/ra) và
 **đếm VÙNG** (occupancy — hợp cảnh người đi lại lộn xộn như quảng trường). Video

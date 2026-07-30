@@ -143,6 +143,24 @@ def test_suite_for_returns_group_query_pairs():
     assert suite_for("khong-co-task") == []
 
 
+def test_suite_lite_is_small_and_representative():
+    # LITE (Colab/session ngắn): mỗi nhóm chỉ 1-2 query, ít hơn HẲN bản đầy đủ.
+    for task in ("people", "vehicles", "conveyor"):
+        full = suite_for(task)
+        lite2 = suite_for(task, lite=True, per_group=2)
+        lite1 = suite_for(task, lite=True, per_group=1)
+        assert len(lite2) < len(full)
+        assert len(lite1) <= len(lite2)
+        # mỗi nhóm ≤ per_group
+        from collections import Counter
+        assert all(c <= 2 for c in Counter(g for g, _ in lite2).values())
+        assert all(c == 1 for c in Counter(g for g, _ in lite1).values())
+    # màu = đỏ + trắng (đại diện) đứng đầu
+    peo = suite_for("people", lite=True, per_group=2)
+    colors = [q for g, q in peo if g == "màu/trang phục"]
+    assert any("red" in q for q in colors) and any("white" in q for q in colors)
+
+
 def test_total_test_cases_is_large():
     # tổng số ca test (suite + query per-video) đủ phong phú như yêu cầu
     total = sum(len(suite_for(t)) for t in QUERY_SUITES) + sum(len(v.queries) for v in CATALOG)

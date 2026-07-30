@@ -42,22 +42,30 @@ def print_scorecard(rows: list) -> None:
         print("  ".join(str(r.get(c, "")).ljust(widths[c]) for c in cols))
 
 
-def _frames_of(path, resolution):
-    """Đọc video, resize về resolution của scenario (để vạch %/toạ độ khớp)."""
+def _frames_of(path, resolution, stride=1):
+    """Đọc video, resize về resolution của scenario (để vạch %/toạ độ khớp).
+
+    ``stride>1`` bỏ bớt frame (chỉ lấy mỗi frame thứ ``stride``) → chạy NHANH hơn
+    (ít lần gọi model). Dùng cho chế độ suite/thử nhanh; đếm chính xác nên để stride=1.
+    """
     import cv2
 
     w, h = resolution
+    stride = max(1, int(stride))
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise RuntimeError(f"Không mở được video: {path}")
     try:
+        i = 0
         while True:
             ok, fr = cap.read()
             if not ok:
                 break
-            if (fr.shape[1], fr.shape[0]) != (w, h):
-                fr = cv2.resize(fr, (w, h))
-            yield fr
+            if i % stride == 0:
+                if (fr.shape[1], fr.shape[0]) != (w, h):
+                    fr = cv2.resize(fr, (w, h))
+                yield fr
+            i += 1
     finally:
         cap.release()
 
@@ -309,10 +317,20 @@ def run(args) -> int:
 
     # Query khó → open-vocab (LocateAnything). Nếu test nhiều query mà chưa chỉ định
     # model thì tự chuyển sang locate (YOLO chỉ biết lớp COCO, không hiểu mô tả).
+    run_suite = args.suite or args.suite_full         # --suite = LITE (nhanh), --suite-full = đầy đủ
     manual_queries = [q.strip() for q in args.queries.split(",") if q.strip()] if args.queries else None
-    testing_queries = bool(manual_queries) or args.all_queries or args.suite
+    testing_queries = bool(manual_queries) or args.all_queries or run_suite
     if testing_queries and args.model == "auto":
         args.model = "locate"
+
+    # TỐI ƯU TỐC ĐỘ (Colab/Kaggle session ngắn): chế độ suite mặc định ÍT frame + bỏ
+    # bớt frame (stride) vì suite là "thử khả năng mô tả", không cần đếm cực chuẩn.
+    max_frames = args.max_frames if args.max_frames is not None else (60 if run_suite else 300)
+    stride = args.stride if args.stride is not None else (2 if run_suite else 1)
+    if run_suite:
+        print(f"⚡ Suite {'ĐẦY ĐỦ' if args.suite_full else 'LITE'}: "
+              f"{args.suite_per_group} query/nhóm · max_frames={max_frames} · stride={stride} "
+              f"(đổi bằng --suite-per-group/--max-frames/--stride; nên chạy 1 video với --only)")
 
     def _wants_locate(model_field: str) -> bool:
         return args.model == "locate" or (args.model == "auto" and not model_field.startswith("YOLO"))
@@ -361,8 +379,9 @@ def run(args) -> int:
 
         # Chọn danh sách prompt để test trên video này (DỄ→KHÓ).
         # Danh sách (nhóm, query) để test trên video này.
-        if args.suite:
-            qpairs = suite_for(v.task) or [("", v.scenario.prompt)]
+        if run_suite:
+            qpairs = suite_for(v.task, lite=not args.suite_full,
+                               per_group=args.suite_per_group) or [("", v.scenario.prompt)]
         elif manual_queries:
             qpairs = [("", q) for q in manual_queries]
         elif args.all_queries:
@@ -392,14 +411,15 @@ def run(args) -> int:
                 def on_frame(frame, tracked, pipe, _w=writer):
                     _w.write(_draw_overlay(frame, tracked, pipe))
 
-            pipe.run(_frames_of(path, sc.resolution), max_frames=args.max_frames, on_frame=on_frame)
+            pipe.run(_frames_of(path, sc.resolution, stride=stride),
+                     max_frames=max_frames, on_frame=on_frame)
             if writer is not None:
                 writer.release()
                 print(f"  🎥 lưu video: {out_path}")
 
             r = pipe.result.as_row()
             row = {"video": v.name, "task": v.task}
-            if args.suite:
+            if run_suite:
                 row["nhóm"] = group
             row.update({"query": q, "type": sc.counting_type, **r})
             ok = (r.get("det/frame", 0) > 0
@@ -441,9 +461,16 @@ def main() -> int:
     ap.add_argument("--all-queries", action="store_true",
                     help="test TẤT CẢ query khó gợi ý sẵn của mỗi video (cột 'queries' trong --list)")
     ap.add_argument("--suite", action="store_true",
-                    help="chạy BỘ QUERY SUITE đầy đủ theo NHÓM cho bài toán (cơ bản/màu/phụ kiện/"
-                         "hành động/khó/tiếng Việt) — nhiều trường hợp như bảng test Excel")
-    ap.add_argument("--max-frames", type=int, default=300)
+                    help="chạy QUERY SUITE theo NHÓM — bản LITE (1-2 query/nhóm, đại diện: "
+                         "màu=đỏ/trắng…) + ÍT frame → NHANH, hợp Colab/Kaggle session ngắn")
+    ap.add_argument("--suite-full", action="store_true",
+                    help="chạy BỘ SUITE ĐẦY ĐỦ (20-30+ query/bài) — chậm, chỉ khi cần bảng test lớn")
+    ap.add_argument("--suite-per-group", type=int, default=2,
+                    help="số query mỗi nhóm ở suite LITE (mặc định 2 = vd đỏ/trắng; để 1 cho nhanh nhất)")
+    ap.add_argument("--stride", type=int, default=None,
+                    help="bỏ bớt frame: chỉ lấy mỗi frame thứ N (nhanh hơn). Mặc định suite=2, thường=1")
+    ap.add_argument("--max-frames", type=int, default=None,
+                    help="số frame tối đa mỗi lần đếm. Mặc định suite=60 (nhanh), thường=300")
     ap.add_argument("--confidence", type=float, default=0.35)
     ap.add_argument("--yolo-backend", choices=["auto", "ultralytics", "super_gradients"], default="auto")
     ap.add_argument("--only", default=None, help="lọc video theo từ khoá (tên/file/key), vd 'milk'")
