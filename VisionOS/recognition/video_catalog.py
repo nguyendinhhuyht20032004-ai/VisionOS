@@ -166,27 +166,27 @@ _CONVEYOR = [
     #  chạy trên chuyền.) Vật đi XUỐNG về phía camera → vạch NGANG; thùng/cà chua KHÔNG
     #  thuộc COCO → open-vocab LocateAnything-3B.
     VideoScenario("Kiện hàng — băng chuyền con lăn (user)", "conveyor",
-        _sc("conv_rollers", "Đếm kiện hàng con lăn", "cardboard box", "LocateAnything-3B",
+        _sc("conv_rollers", "Đếm kiện hàng con lăn", "carton box", "LocateAnything-3B",
             (0.0, 65.0), (100.0, 65.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
             "Thùng đi xuống → vạch NGANG y=65."),
         "User upload · kho hàng, thùng carton trên băng chuyền con lăn",
         "packages_rollers.mp4", local="sample_videos/packages_rollers.mp4",
-        queries=("cardboard box", "a sealed package", "a stacked box"),
-        tips="Thùng carton KHÔNG thuộc COCO → LocateAnything (open-vocab)."),
+        queries=("carton box", "package", "box"),
+        tips="Thùng carton KHÔNG thuộc COCO → LocateAnything. Dùng DANH TỪ ĐƠN GIẢN (carton box/package)."),
     VideoScenario("Kiện hàng — băng chuyền có nhãn (user)", "conveyor",
-        _sc("conv_belt", "Đếm kiện hàng belt", "cardboard box", "LocateAnything-3B",
+        _sc("conv_belt", "Đếm kiện hàng belt", "package", "LocateAnything-3B",
             (0.0, 60.0), (100.0, 60.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
             "Thùng trôi xuống belt → vạch NGANG y=60."),
         "User upload · công nhân phân loại, thùng carton có nhãn/mã vạch",
         "packages_belt.mp4", local="sample_videos/packages_belt.mp4",
-        queries=("cardboard box", "a package with a shipping label", "a small parcel")),
+        queries=("package", "carton box", "box")),
     VideoScenario("Cà chua — dây chuyền phân loại (user)", "conveyor",
         _sc("conv_tomato", "Đếm cà chua", "tomato", "LocateAnything-3B",
             (0.0, 72.0), (100.0, 72.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
             "Cà chua trôi xuống làn → vạch NGANG y=72."),
         "User upload · nhà máy phân loại cà chua trên dây chuyền inox",
         "tomatoes_sorting.mp4", local="sample_videos/tomatoes_sorting.mp4",
-        queries=("tomato", "a ripe tomato", "cà chua")),
+        queries=("tomato", "fruit", "red fruit")),
 ]
 
 # --------------------------------------------------------------------------- #
