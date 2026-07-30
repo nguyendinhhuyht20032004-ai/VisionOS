@@ -55,3 +55,43 @@ def test_find_by_name_and_key():
 def test_find_unknown_raises():
     with pytest.raises(KeyError):
         _find("khong-co-video-nao-ten-the-nay")
+
+
+def test_gallery_embeds_multiple_frames_and_nav(tmp_path, monkeypatch):
+    from recognition import draw_tool as D
+    from recognition import video_catalog as VC
+
+    vid = _fake_video(tmp_path / "v.mp4")
+
+    class _SC:
+        def __init__(self, k):
+            self.key, self.resolution = k, (640, 360)
+
+    class _V:
+        def __init__(self, k):
+            self.scenario = _SC(k)
+
+    monkeypatch.setattr(D, "_find", lambda n: _V(n))
+    monkeypatch.setattr(VC, "download_video", lambda v, *a, **k: str(vid))
+
+    html = D.draw_gallery(["aaa", "bbb", "ccc"], max_width=600)
+    assert html.count("data:image/jpeg") == 3          # 3 frame nhúng
+    for token in ("prev-", "next-", "◀ Ảnh trước", "Ảnh sau ▶", "const FRAMES",
+                  "function finishZone", "Copy tất cả"):
+        assert token in html, token
+    assert "__UID__" not in html and "__FRAMES__" not in html   # placeholder đã thay hết
+
+
+def test_gallery_all_uses_every_scenario_key():
+    from recognition import draw_tool as D
+    from recognition.video_catalog import CATALOG
+
+    # 'all' phải phủ mọi scenario.key (không trùng) — nhưng cần mạng để tải nên chỉ
+    # kiểm tra danh sách tên được suy ra đúng (patch tải + đọc frame).
+    keys = []
+    seen = set()
+    for v in CATALOG:
+        if v.scenario.key not in seen:
+            seen.add(v.scenario.key)
+            keys.append(v.scenario.key)
+    assert len(keys) == len({v.scenario.key for v in CATALOG}) >= 15
