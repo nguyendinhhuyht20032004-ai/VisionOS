@@ -131,18 +131,16 @@ _VEHICLES = [
             "Vạch ngang (user vẽ)."),
         "Pexels · highway traffic (tiêu đề Pexels: highway)", "traffic_pexels_2103099.mp4",
         pexels_id="2103099", queries=("car", "truck")),
-    # veh_px2: 5 VÙNG user vẽ → GỘP 1 BÀI (đếm xe trong BẤT KỲ vùng nào, ra 1 số tổng).
-    VideoScenario("Giao thông (Pexels 3121459) — đếm xe trong VÙNG", "vehicles",
-        _zone_multi("veh_px2_zone", "Đếm xe trong các vùng", (
-            ((21.6, 41.1), (37.7, 40.6), (36.7, 62.5), (20.5, 62.2)),
-            ((41.4, 0.6), (60.8, 1.4), (60.6, 38.9), (40.5, 37.8)),
-            ((63.3, 38.1), (85.3, 39.7), (86.1, 60.8), (63.9, 60.3)),
-            ((41.6, 68.6), (58.4, 69.2), (58.3, 96.9), (42.3, 98.1)),
-            ((41.3, 43.1), (59.5, 44.2), (59.2, 60.6), (41.9, 63.1)),
-        ), res=(1280, 720), prompt="car", anchor="CENTER"),
-        "Pexels 3121459 · giao thông phố — 5 VÙNG đếm CHUNG (user vẽ)",
-        "traffic_pexels_3121459.mp4", pexels_id="3121459", queries=("car",),
-        tips="Đếm xe trong 5 vùng — ra 1 số tổng (giữ res cao để bắt xe nhỏ)."),
+    # ĐÃ BỎ video top-down 3121459 (COCO YOLO không đọc nổi góc từ trên — det/frame≈0.3).
+    # Thay bằng bài đếm xe TRONG VÙNG trên video RÕ NÉT của supervision (VEHICLES_2, giao
+    # lộ nhiều làn) — chính là kiểu video repo họ dùng, detect rất tốt (283 xe/lượt chạy).
+    VideoScenario("Giao lộ — đếm xe trong VÙNG (supervision)", "vehicles",
+        _zone_multi("veh_junc_zone", "Đếm xe trong vùng giao lộ",
+                    (((15.0, 35.0), (85.0, 35.0), (85.0, 92.0), (15.0, 92.0)),),
+                    res=(1280, 720), prompt="car", anchor="CENTER"),
+        "Roboflow supervision · giao lộ (vehicles-2) — VÙNG, video RÕ như repo",
+        "vehicles-2.mp4", asset="VEHICLES_2", queries=("car",),
+        tips="Vùng mặc định phủ mặt đường; vẽ lại cho khớp bằng draw_gallery('giao lộ')."),
 ]
 
 # --------------------------------------------------------------------------- #

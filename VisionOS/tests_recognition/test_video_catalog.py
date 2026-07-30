@@ -33,11 +33,11 @@ def test_conveyor_and_vehicles_present():
 
 
 def test_no_mislabeled_videos():
-    # video nước chảy (1093662) đã bị BỎ; 3121459 (thực ra là xe) phải ở bài vehicles
+    # video nước chảy (1093662) đã bỏ; 3121459 (top-down COCO không đọc nổi) cũng đã bỏ,
+    # thay bằng video giao lộ RÕ NÉT của supervision cho bài đếm xe trong vùng.
     ids = {v.pexels_id for v in CATALOG}
     assert "1093662" not in ids                                     # video nước → đã bỏ
-    v3121459 = [v for v in CATALOG if v.pexels_id == "3121459"]
-    assert v3121459 and v3121459[0].task == "vehicles"             # xe, không phải người
+    assert "3121459" not in ids                                     # top-down khó → đã bỏ
 
 
 def test_conveyor_has_hard_queries_for_products():
@@ -107,8 +107,8 @@ def test_zone_scenarios_have_polygon():
 def test_multi_zone_scenarios_merged_not_split():
     # user yêu cầu: nhiều vùng trên 1 video → GỘP 1 bài (không tách từng vùng 1 case).
     byk = {v.scenario.key: v.scenario for v in CATALOG}
-    assert "veh_px2_zone" in byk and len(byk["veh_px2_zone"].build_zones()) == 5
     assert "ppl_store_zone" in byk and len(byk["ppl_store_zone"].build_zones()) == 3
+    assert "veh_junc_zone" in byk                                   # bài đếm xe trong vùng (video rõ)
     # KHÔNG còn scenario tách riêng từng vùng
     keys = set(byk)
     assert not any(k.endswith(("_z1", "_z2", "_z3", "_z4", "_z5")) for k in keys)
