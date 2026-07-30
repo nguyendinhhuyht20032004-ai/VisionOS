@@ -186,8 +186,13 @@ class LocateAnythingDetector:
             attn_implementation=attn_impl,
         )
         if torch.cuda.is_available() and not self._cpu_debug:
-            self.model = self.model.to("cuda:0")
-            
+            # Dọn cache + ÉP đúng dtype (float16) khi đưa lên GPU. Một số bản
+            # transformers/model tuỳ biến KHÔNG áp torch_dtype khi nạp → model nằm
+            # float32 trên CPU; .to("cuda") nguyên float32 = ~14GB → OOM trên T4.
+            # .to(dtype=...) ép về float16 (~7GB) ngay lúc chuyển, tránh OOM.
+            torch.cuda.empty_cache()
+            self.model = self.model.to(device="cuda:0", dtype=self.dtype)
+
         # =========================================================================
         # CHUỖI VÁ SÂU DƯỚI ĐÂY (global SDPA / Linear / DecoderLayer / MLP) chỉ còn
         # ý nghĩa khi ĐANG DÙNG attn_implementation="sdpa" (đường cũ, giữ lại để đối
