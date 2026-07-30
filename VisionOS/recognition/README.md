@@ -253,6 +253,11 @@ từng ô, vật to ở gần vẫn bắt bằng lượt toàn ảnh. Chậm hơ
 hạ về scenario) → detect nét hơn; vạch/vùng theo %% nên vẫn khớp. Bản mạnh nhất cho cảnh
 khó: `--yolo-weights yolo11x.pt --tile --proc-width 1920 --confidence 0.15` (chậm).
 
+**RT-DETR (detector transformer — supervision demo hay dùng):** thử
+`--yolo-weights rtdetr-x.pt` (hoặc `rtdetr-l.pt`). Detector này KHÁC YOLO, đôi khi bắt
+tốt hơn ở cảnh đông. Lưu ý: **supervision KHÔNG tự detect** — nó chỉ track/vẽ/đếm trên
+kết quả của model ngoài (YOLO/RT-DETR), đúng như package này đang làm.
+
 Video output ghi đúng **FPS nguồn** (chia cho `--stride`) nên không còn phát chậm như
 slow-motion.
 

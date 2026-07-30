@@ -70,7 +70,16 @@ class UltralyticsYoloDetector:
             from ultralytics import YOLO
 
         t0 = time.time()
-        self._model = YOLO(self.weights)      # tự tải weight lần đầu
+        # RT-DETR (detector transformer của supervision demo) dùng class riêng; YOLO cho phần còn lại.
+        if "rtdetr" in self.weights.lower() or "rt-detr" in self.weights.lower():
+            try:
+                from ultralytics import RTDETR
+
+                self._model = RTDETR(self.weights)
+            except Exception:  # noqa: BLE001 — ultralytics cũ → thử YOLO()
+                self._model = YOLO(self.weights)
+        else:
+            self._model = YOLO(self.weights)  # tự tải weight lần đầu
         if self.device:
             self._model.to(self.device)
         self._names = self._model.names       # dict {id: 'person', ...}
