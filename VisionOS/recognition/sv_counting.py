@@ -45,8 +45,12 @@ def _to_sv(dets, sv, np):
         return sv.Detections.empty()
     xyxy = np.array([[float(v) for v in d.bbox.as_xyxy()] for d in dets], dtype=float)
     conf = np.full(len(dets), 0.9, dtype=float)
-    cls = np.zeros(len(dets), dtype=int)          # đã lọc theo prompt → 1 lớp
-    return sv.Detections(xyxy=xyxy, confidence=conf, class_id=cls)
+    # GIỮ tên lớp thật (car/truck/tomato…) để ĐÁNH NHÃN; class_id theo lớp → màu theo lớp.
+    names = [(getattr(d, "label", None) or "object") for d in dets]
+    uniq = {n: i for i, n in enumerate(sorted(set(names)))}
+    cls = np.array([uniq[n] for n in names], dtype=int)
+    return sv.Detections(xyxy=xyxy, confidence=conf, class_id=cls,
+                         data={"class_name": np.array(names)})
 
 
 def _make_polygon_zone(sv, poly, w, h):
@@ -173,9 +177,14 @@ def _annotate_sv(frame, det, annos, line, res, w, h, cv2, sv):
     if len(det):
         f = annos["trace"].annotate(f, det)            # vệt chuyển động
         f = annos["box"].annotate(f, det)              # box bo góc theo track
-        labels = ([f"#{int(t)}" for t in det.tracker_id]
-                  if det.tracker_id is not None else None)
-        f = annos["label"].annotate(f, det, labels=labels)
+        names = det.data.get("class_name") if getattr(det, "data", None) else None
+        tids = det.tracker_id
+        labels = []
+        for i in range(len(det)):
+            nm = _ascii(str(names[i])) if names is not None else ""
+            tid = tids[i] if tids is not None else None
+            labels.append(f"{nm} #{int(tid)}".strip() if tid is not None else (nm or "?"))
+        f = annos["label"].annotate(f, det, labels=labels)  # NHÃN: tên vật + #track
     if line is not None and annos["line"] is not None:
         f = annos["line"].annotate(f, line)            # bộ đếm in/out trên vạch
     # Banner tóm tắt trên cùng (ASCII).
@@ -204,9 +213,11 @@ def _draw(frame, det, scenario, line, zones_px, res, w, h, cv2, np):
     n = len(det)
     xyxy = det.xyxy if n else []
     tids = det.tracker_id if (n and det.tracker_id is not None) else [None] * n
-    for (x1, y1, x2, y2), tid in zip(xyxy, tids):
+    names = det.data.get("class_name") if (n and getattr(det, "data", None)) else None
+    for idx, ((x1, y1, x2, y2), tid) in enumerate(zip(xyxy, tids)):
         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), CYAN, 2)
-        lbl = f"#{int(tid)}" if tid is not None else "#?"
+        nm = _ascii(str(names[idx])) if names is not None else ""
+        lbl = f"{nm} #{int(tid)}".strip() if tid is not None else (nm or "#?")
         cv2.putText(img, lbl, (int(x1), max(12, int(y1) - 4)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, CYAN, 1)
     if line is not None:

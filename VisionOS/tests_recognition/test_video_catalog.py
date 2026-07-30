@@ -28,8 +28,8 @@ def test_many_angles_per_task():
 def test_conveyor_and_vehicles_present():
     assert any(v.asset == "MILK_BOTTLING_PLANT" for v in CATALOG)   # dây chuyền
     assert any(v.task == "vehicles" for v in CATALOG)               # phương tiện
-    # có video kiện hàng trên chuyền (đúng bài "đếm sản phẩm")
-    assert any("4156510" == v.pexels_id for v in CATALOG)
+    # có video SẢN PHẨM THẬT (user upload, nguồn local) trên băng chuyền
+    assert any(v.local and v.task == "conveyor" for v in CATALOG)
 
 
 def test_no_mislabeled_videos():
@@ -50,13 +50,13 @@ def test_conveyor_has_hard_queries_for_products():
 
 
 def test_conveyor_has_many_product_videos():
-    assert len(by_task("conveyor")) >= 5      # nhiều video sản phẩm
+    assert len(by_task("conveyor")) >= 4      # milk (supervision) + 3 video user thật
 
 
 def test_every_entry_has_exactly_one_source():
-    # mỗi video phải có ĐÚNG 1 nguồn tải: asset | url | pexels_id
+    # mỗi video phải có ĐÚNG 1 nguồn: asset | url | pexels_id | local
     for v in CATALOG:
-        srcs = [bool(v.asset), bool(v.url), bool(v.pexels_id)]
+        srcs = [bool(v.asset), bool(v.url), bool(v.pexels_id), bool(v.local)]
         assert sum(srcs) == 1, f"{v.name} phải có đúng 1 nguồn, có {sum(srcs)}"
 
 
@@ -188,3 +188,55 @@ def test_total_test_cases_is_large():
     # tổng số ca test (suite + query per-video) đủ phong phú như yêu cầu
     total = sum(len(suite_for(t)) for t in QUERY_SUITES) + sum(len(v.queries) for v in CATALOG)
     assert total >= 100
+
+
+# --------------------------------------------------------------------------- #
+# VIDEO USER (local) + XOÁ conveyor lỗi + phương tiện đa lớp
+# --------------------------------------------------------------------------- #
+def test_new_local_conveyor_videos_present_and_on_disk():
+    import os
+
+    byk = {v.scenario.key: v for v in CATALOG}
+    for k in ("conv_rollers", "conv_belt", "conv_tomato"):
+        assert k in byk, f"thiếu video mới {k}"
+        v = byk[k]
+        assert v.local and v.task == "conveyor"
+        assert v.scenario.counting_type == "line"
+        # vạch NGANG (vật đi xuống): y1≈y2, x trải rộng
+        (x1, y1), (x2, y2) = v.scenario.line_start_pct, v.scenario.line_end_pct
+        assert abs(y1 - y2) < 1e-6 and abs(x1 - x2) > 50, k
+        # file ĐÃ commit vào repo
+        code_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        assert os.path.exists(os.path.join(code_dir, v.local)), f"chưa commit: {v.local}"
+
+
+def test_broken_pexels_conveyors_removed():
+    ids = {v.pexels_id for v in CATALOG}
+    for bad in ("4156510", "30715848", "4473250", "4473187"):
+        assert bad not in ids, f"video Pexels lỗi {bad} chưa bị xoá"
+    keys = {v.scenario.key for v in CATALOG}
+    for bad in ("conv_pkg", "conv_line", "conv_fac", "conv_close"):
+        assert bad not in keys, f"scenario lỗi {bad} chưa bị xoá"
+
+
+def test_vehicles_prompt_is_multiclass_vehicle():
+    # phần phương tiện đổi sang 'vehicle' → bắt CẢ car/truck/bus/motorcycle
+    veh = by_task("vehicles")
+    assert veh
+    for v in veh:
+        assert v.scenario.prompt == "vehicle", v.scenario.key
+
+
+def test_vehicle_alias_maps_to_all_vehicle_classes():
+    from recognition.detectors.yolo_nas import COCO_ALIASES
+    assert set(COCO_ALIASES["vehicle"]) == {"car", "motorcycle", "truck", "bus"}
+
+
+def test_download_video_returns_local_path():
+    from recognition.video_catalog import download_video
+
+    v = next(v for v in CATALOG if v.scenario.key == "conv_tomato")
+    p = download_video(v)
+    assert p.endswith("tomatoes_sorting.mp4")
+    import os
+    assert os.path.exists(p) and os.path.getsize(p) > 0

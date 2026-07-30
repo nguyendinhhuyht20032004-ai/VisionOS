@@ -26,6 +26,9 @@ __all__ = [
     "QUERY_SUITES", "suite_for", "RB_CDN", "PEXELS_CDN",
 ]
 
+# Thư mục code (chứa sample_videos/) — để giải đường dẫn video LOCAL đã commit repo.
+_CODE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 RB_CDN = "https://media.roboflow.com/supervision/video-examples/"
 PEXELS_CDN = "https://videos.pexels.com/video-files/"
 # Endpoint tải CHÍNH THỨC của Pexels: trả file res cao nhất, KHÔNG cần đoán hậu tố
@@ -54,6 +57,7 @@ class VideoScenario:
     asset: Optional[str] = None
     url: Optional[str] = None
     pexels_id: Optional[str] = None
+    local: Optional[str] = None         # video ĐÃ commit repo (vd 'sample_videos/x.mp4')
     queries: Tuple[str, ...] = ()      # prompt dễ→khó (rỗng = dùng scenario.prompt)
     tips: str = ""
 
@@ -111,7 +115,7 @@ def _zone_multi(key, title, zones, res=(1280, 720), prompt="person", anchor="BOT
 _VEHICLES = [
     # Vạch xe do user vẽ tay trên frame thật (ngang gần đáy, hơi nghiêng theo đường).
     VideoScenario("Cao tốc top-down (supervision)", "vehicles",
-        _sc("veh_hw", "Xe cao tốc", "car", "YOLO-NAS-S",
+        _sc("veh_hw", "Xe cao tốc", "vehicle", "YOLO-NAS-S",
             (3.4, 90.3), (98.4, 82.9), "Chiều A", "Chiều B", "CENTER", (1280, 720),
             "Vạch ngang gần đáy (user vẽ)."),
         "Roboflow supervision · cao tốc quay dọc — TIN CẬY",
@@ -119,14 +123,14 @@ _VEHICLES = [
         queries=("car", "white car", "truck", "a vehicle changing lane"),
         tips="Kinh điển đếm xe; đổi prompt để test 'truck'/'bus'."),
     VideoScenario("Giao lộ nhiều làn (supervision)", "vehicles",
-        _sc("veh_junc", "Xe giao lộ", "car", "YOLO-NAS-S",
+        _sc("veh_junc", "Xe giao lộ", "vehicle", "YOLO-NAS-S",
             (3.5, 93.6), (93.2, 88.8), "Chiều A", "Chiều B", "CENTER", (1280, 720),
             "Vạch ngang gần đáy (user vẽ)."),
         "Roboflow supervision · nhiều làn — TIN CẬY",
         "vehicles-2.mp4", asset="VEHICLES_2",
         queries=("car", "bus", "truck", "a car turning")),
     VideoScenario("Cao tốc 1080p (Pexels 2103099)", "vehicles",
-        _sc("veh_px1", "Xe cao tốc 1080p", "car", "YOLO-NAS-S",
+        _sc("veh_px1", "Xe cao tốc 1080p", "vehicle", "YOLO-NAS-S",
             (0.0, 75.0), (99.4, 78.5), "Chiều A", "Chiều B", "CENTER", (1920, 1080),
             "Vạch ngang (user vẽ)."),
         "Pexels · highway traffic (tiêu đề Pexels: highway)", "traffic_pexels_2103099.mp4",
@@ -137,9 +141,9 @@ _VEHICLES = [
     VideoScenario("Giao lộ — đếm xe trong VÙNG (supervision)", "vehicles",
         _zone_multi("veh_junc_zone", "Đếm xe trong vùng giao lộ",
                     (((15.0, 35.0), (85.0, 35.0), (85.0, 92.0), (15.0, 92.0)),),
-                    res=(1280, 720), prompt="car", anchor="CENTER"),
+                    res=(1280, 720), prompt="vehicle", anchor="CENTER"),
         "Roboflow supervision · giao lộ (vehicles-2) — VÙNG, video RÕ như repo",
-        "vehicles-2.mp4", asset="VEHICLES_2", queries=("car",),
+        "vehicles-2.mp4", asset="VEHICLES_2", queries=("car", "truck", "bus"),
         tips="Vùng mặc định phủ mặt đường; vẽ lại cho khớp bằng draw_gallery('giao lộ')."),
 ]
 
@@ -157,39 +161,32 @@ _CONVEYOR = [
         queries=("bottle", "plastic bottle", "milk bottle", "bottle cap",
                  "a bottle without a cap", "a fallen bottle"),
         tips="'bottle' chạy YOLO nhanh; query khó cần --model locate."),
-    # ƯU TIÊN video NHIỀU SẢN PHẨM chạy trên chuyền (theo yêu cầu):
-    VideoScenario("Kiện hàng chạy trên chuyền (Pexels 4156510)", "conveyor",
-        _sc("conv_pkg", "Đếm kiện hàng", "cardboard box on a conveyor belt", "LocateAnything-3B",
-            (39.1, 41.4), (41.0, 47.5), "Qua vạch", "Ngược", "CENTER", (1280, 720),
-            "Vạch theo chỗ thùng chạy (user vẽ)."),
-        "Pexels · 'packages moving on a conveyor belt' — NHIỀU thùng chạy liên tục",
-        "conveyor_packages_4156510.mp4", pexels_id="4156510",
-        queries=("cardboard box", "package", "a sealed box", "a brown box",
-                 "a damaged package", "the largest box"),
-        tips="Bài 'đếm sản phẩm' điển hình — thùng carton KHÔNG thuộc COCO."),
-    # (đã bỏ conv_action / Pexels 35069357 — user xác nhận KHÔNG phải băng chuyền.)
-    VideoScenario("Dây chuyền nhà máy rộng (Pexels 30715848)", "conveyor",
-        _sc("conv_line", "Đếm sản phẩm dây chuyền", "product on the production line", "LocateAnything-3B",
-            (80.2, 66.8), (94.4, 63.2), "Qua vạch", "Ngược", "CENTER", (1280, 720),
-            "Vạch theo chỗ sản phẩm chạy (user vẽ)."),
-        "Pexels · 'wide view of modern factory production line' — góc rộng nhiều sản phẩm",
-        "conveyor_line_30715848.mp4", pexels_id="30715848",
-        queries=("product on the production line", "finished product",
-                 "an item being assembled", "a bottle", "a box")),
-    VideoScenario("Băng chuyền nhà máy (Pexels 4473250)", "conveyor",
-        _sc("conv_fac", "Đếm vật trên chuyền", "item on the conveyor belt", "LocateAnything-3B",
-            (14.8, 64.0), (84.2, 76.8), "Qua vạch", "Ngược", "CENTER", (1280, 720),
-            "Vạch chéo theo chuyền (user vẽ)."),
-        "Pexels · 'factory conveyor belt'", "conveyor_factory_4473250.mp4",
-        pexels_id="4473250",
-        queries=("item on the conveyor belt", "product", "a metal part", "a small component")),
-    VideoScenario("Băng chuyền cận cảnh (Pexels 4473187)", "conveyor",
-        _sc("conv_close", "Đếm vật băng chuyền", "product on the conveyor belt", "LocateAnything-3B",
-            (37.9, 47.5), (73.1, 34.9), "Qua vạch", "Ngược", "CENTER", (1280, 720),
-            "Vạch chéo cận cảnh (user vẽ)."),
-        "Pexels · 'black conveyor belt' cận cảnh", "conveyor_black_4473187.mp4",
-        pexels_id="4473187",
-        queries=("object on the belt", "product", "a dark colored item")),
+    # === Video THẬT của user (đã commit repo sample_videos/) — CÓ sản phẩm chạy rõ ===
+    # (Đã BỎ 4 video Pexels lỗi: 4156510/30715848/4473250/4473187 — không có sản phẩm
+    #  chạy trên chuyền.) Vật đi XUỐNG về phía camera → vạch NGANG; thùng/cà chua KHÔNG
+    #  thuộc COCO → open-vocab LocateAnything-3B.
+    VideoScenario("Kiện hàng — băng chuyền con lăn (user)", "conveyor",
+        _sc("conv_rollers", "Đếm kiện hàng con lăn", "cardboard box", "LocateAnything-3B",
+            (0.0, 65.0), (100.0, 65.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
+            "Thùng đi xuống → vạch NGANG y=65."),
+        "User upload · kho hàng, thùng carton trên băng chuyền con lăn",
+        "packages_rollers.mp4", local="sample_videos/packages_rollers.mp4",
+        queries=("cardboard box", "a sealed package", "a stacked box"),
+        tips="Thùng carton KHÔNG thuộc COCO → LocateAnything (open-vocab)."),
+    VideoScenario("Kiện hàng — băng chuyền có nhãn (user)", "conveyor",
+        _sc("conv_belt", "Đếm kiện hàng belt", "cardboard box", "LocateAnything-3B",
+            (0.0, 60.0), (100.0, 60.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
+            "Thùng trôi xuống belt → vạch NGANG y=60."),
+        "User upload · công nhân phân loại, thùng carton có nhãn/mã vạch",
+        "packages_belt.mp4", local="sample_videos/packages_belt.mp4",
+        queries=("cardboard box", "a package with a shipping label", "a small parcel")),
+    VideoScenario("Cà chua — dây chuyền phân loại (user)", "conveyor",
+        _sc("conv_tomato", "Đếm cà chua", "tomato", "LocateAnything-3B",
+            (0.0, 72.0), (100.0, 72.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
+            "Cà chua trôi xuống làn → vạch NGANG y=72."),
+        "User upload · nhà máy phân loại cà chua trên dây chuyền inox",
+        "tomatoes_sorting.mp4", local="sample_videos/tomatoes_sorting.mp4",
+        queries=("tomato", "a ripe tomato", "cà chua")),
 ]
 
 # --------------------------------------------------------------------------- #
@@ -355,6 +352,14 @@ def _fetch(url: str, dest: str, min_bytes: int = 200_000) -> bool:
 
 
 def download_video(vs: VideoScenario, dest_dir: str = "videos") -> str:
+    # Video LOCAL (đã commit repo) → trả THẲNG đường dẫn, không tải mạng.
+    if vs.local:
+        p = vs.local if os.path.isabs(vs.local) else os.path.join(_CODE_DIR, vs.local)
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+        raise RuntimeError(
+            f"Không thấy video local: {p} — đã commit '{vs.local}' vào repo chưa?")
+
     os.makedirs(dest_dir, exist_ok=True)
     dest = os.path.join(dest_dir, vs.filename)
     if os.path.exists(dest) and os.path.getsize(dest) > 0:

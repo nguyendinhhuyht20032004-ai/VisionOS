@@ -25,6 +25,10 @@ COCO_ALIASES = {
     "car": ["car"],
     "ô tô": ["car"],
     "oto": ["car"],
+    # "vehicle"/"phương tiện"/"xe" → MỌI loại xe (bắt cả tải/buýt/máy, không chỉ ô tô)
+    "vehicle": ["car", "motorcycle", "truck", "bus"],
+    "phương tiện": ["car", "motorcycle", "truck", "bus"],
+    "phuong tien": ["car", "motorcycle", "truck", "bus"],
     "xe": ["car", "motorcycle", "truck", "bus"],
     "xe máy": ["motorcycle"],
     "motorcycle": ["motorcycle"],
