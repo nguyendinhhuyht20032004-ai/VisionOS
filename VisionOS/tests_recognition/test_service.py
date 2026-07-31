@@ -15,8 +15,21 @@ from recognition.service.builder import wants_yolo
 # builder
 # --------------------------------------------------------------------------- #
 def test_wants_yolo_routing():
-    assert wants_yolo("person") and wants_yolo("car") and wants_yolo("a white car")
+    # TỪ-LỚP đơn thuần → YOLO
+    assert wants_yolo("person") and wants_yolo("car") and wants_yolo("a car") and wants_yolo("truck")
+    assert wants_yolo("xe tải")                       # cụm lớp COCO
+    # có MÀU / MÔ TẢ → LocateAnything (open-vocab) — mấu chốt để nhận MÀU XE
+    assert not wants_yolo("a red car") and not wants_yolo("a white car")
+    assert not wants_yolo("a large truck") and not wants_yolo("a person wearing a backpack")
+    # không thuộc COCO → LocateAnything
     assert not wants_yolo("object") and not wants_yolo("carton box") and not wants_yolo("tomato")
+
+
+def test_color_query_routes_to_locate():
+    _, kind = make_scenario("a red car", "line")
+    assert kind == "locate"                           # màu xe → LocateAnything
+    _, kind = make_scenario("car", "line")
+    assert kind == "yolo"                             # đếm mọi xe → YOLO (nhanh)
 
 
 def test_make_scenario_line_yolo():

@@ -19,17 +19,25 @@ _YOLO_WORDS = {"person", "people", "nguoi", "car", "vehicle", "xe", "truck", "bu
                "motorcycle", "motorbike", "bicycle", "bottle"}
 
 
+_ARTICLES = {"a", "an", "the", "một", "các", "những"}
+
+
 def wants_yolo(prompt: str) -> bool:
+    """True → YOLO (lớp COCO cố định, nhanh); False → LocateAnything (open-vocab).
+
+    CHỈ định tuyến YOLO khi prompt là TỪ-LỚP ĐƠN THUẦN (car / truck / person / 'xe tải').
+    Có thêm MÔ TẢ (màu 'a red car', tính từ 'a large truck', 'wearing a backpack') →
+    LocateAnything, vì YOLO bỏ qua màu/mô tả (chỉ biết lớp). Đây là điểm mấu chốt để
+    nhận diện MÀU XE / đặc điểm.
+    """
     p = (prompt or "").lower().strip()
     if not p:
         return False
-    # Khớp theo TỪ NGUYÊN VẸN (tránh 'car' dính trong 'carton box').
-    tokens = set(p.split())
-    single = _YOLO_WORDS | {k for k in COCO_ALIASES if " " not in k}
-    if tokens & single:
+    if p in COCO_ALIASES:                       # cụm lớp COCO (vd 'ô tô', 'xe tải', 'xe máy')
         return True
-    # cụm nhiều từ (vd 'ô tô', 'xe máy') → khớp nguyên cụm
-    return any(k in p for k in COCO_ALIASES if " " in k)
+    words = [w for w in p.split() if w not in _ARTICLES]   # bỏ mạo từ
+    single = _YOLO_WORDS | {k for k in COCO_ALIASES if " " not in k}
+    return len(words) == 1 and words[0] in single          # đúng 1 từ-lớp → YOLO; còn lại → LA
 
 
 def make_scenario(prompt: str, counting_type: str = "line",
