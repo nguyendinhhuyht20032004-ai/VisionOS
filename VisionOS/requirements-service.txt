@@ -1,0 +1,6 @@
+# Phụ thuộc RIÊNG cho service AI (recognition/service). Cài thêm ngoài requirements chính.
+#   pip install -r requirements-service.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# (opencv-python-headless, supervision, numpy: đã có ở phần counting;
+#  torch/transformers/ultralytics: cần cho detector khi chạy thật.)
