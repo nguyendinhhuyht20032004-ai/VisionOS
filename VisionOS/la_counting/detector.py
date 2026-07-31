@@ -289,6 +289,8 @@ class LocateAnythingDetector:
         if not self._loaded:
             self.load()
         torch = self._torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()      # dọn VRAM phân mảnh trước mỗi frame → đỡ OOM ở vision encoder
         w, h = pil_image.size
         max_tok = max_new_tokens or self.max_new_tokens
 
