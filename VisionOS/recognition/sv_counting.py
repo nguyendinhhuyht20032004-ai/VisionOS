@@ -84,7 +84,7 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None, 
     # track qua che khuất, ít đứt-nối ID). Fallback dần cho bản supervision cũ.
     tracker = None
     for kwargs in (
-        dict(track_activation_threshold=track_thresh, minimum_consecutive_frames=1, lost_track_buffer=60),
+        dict(track_activation_threshold=track_thresh, minimum_consecutive_frames=1, lost_track_buffer=120),
         dict(track_thresh=track_thresh),
         {},
     ):

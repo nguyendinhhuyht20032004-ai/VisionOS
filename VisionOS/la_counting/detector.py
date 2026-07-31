@@ -292,98 +292,22 @@ class LocateAnythingDetector:
         w, h = pil_image.size
         max_tok = max_new_tokens or self.max_new_tokens
 
-        # ------------------------------------------------------------------ #
-        # Dựng input ĐÚNG cách của LocateAnything (theo NVlabs/Eagle worker).
-        # LocateAnything có PROCESSOR RIÊNG (processing_locateanything.py) với:
-        #   * ``py_apply_chat_template`` — chèn đúng token ảnh <IMG_CONTEXT> theo
-        #     grid patch của ẢNH (KHÔNG phải ``apply_chat_template`` generic!),
-        #   * ``process_vision_info`` — tách ảnh/video ra khỏi messages.
-        # Dùng nhầm apply_chat_template generic → số token ảnh KHÔNG khớp số patch
-        # → input_ids/position_ids lệch → "vectorized_gather_kernel index out of
-        # bounds" (CUDA assert) đúng như lỗi đã gặp. Ảnh phải NẰM TRONG message.
-        # ------------------------------------------------------------------ #
-        instruction = (
-            f"Locate all the instances that match the following description: {prompt}."
-        )
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": pil_image},
-                    {"type": "text", "text": instruction},
-                ],
-            }
-        ]
-        proc = self.processor
-        if hasattr(proc, "py_apply_chat_template"):
-            text = proc.py_apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-        else:
-            text = proc.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-
-        # text phải là LIST; ảnh lấy qua process_vision_info nếu có.
-        if hasattr(proc, "process_vision_info"):
-            images, videos = proc.process_vision_info(messages)
-            inputs = proc(text=[text], images=images, videos=videos, return_tensors="pt")
-        else:
-            inputs = proc(text=[text], images=[pil_image], return_tensors="pt")
+        # RECIPE ĐÃ CHẠY ĐƯỢC (đúng notebook Kaggle của user): apply_chat_template +
+        # ảnh dạng PLACEHOLDER trong message + images=[pil] truyền riêng + generate
+        # THƯỜNG (do_sample=False). Trước đây dùng py_apply_chat_template/
+        # process_vision_info + generation_mode="hybrid" → model trả RỖNG hoặc box
+        # "cả khung ảnh" trên transformers 4.57.1. Đã thay bằng recipe tối giản này.
+        messages = [{"role": "user", "content": [
+            {"type": "image"},
+            {"type": "text", "text": f"Locate all instances of: {prompt}"}]}]
+        text_prompt = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True)
+        inputs = self.processor(text=text_prompt, images=[pil_image], return_tensors="pt")
         inputs = {k: self._prep_input(v) for k, v in inputs.items()}
-
-        
-        # generate() TÙY BIẾN của model: cần generation_mode="hybrid" (mặc định của
-        # NVIDIA — Parallel Box Decoding). repetition_penalty chặn lặp box. Một số
-        # kwargs có thể không được nhận ở bản generate này → thử rồi rút gọn dần.
-        base_full = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True, generation_mode="hybrid", repetition_penalty=1.2)
-        # Fallback VẪN GIỮ repetition_penalty (chống bùng nổ box lặp) — chỉ bỏ
-        # generation_mode nếu bản generate không nhận. Bỏ hẳn penalty là nguyên nhân
-        # 168 box/frame → tracker loạn → IN/OUT=0.
-        base_rep = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True, repetition_penalty=1.2)
-        base_simple = dict(**inputs, tokenizer=self.tokenizer, max_new_tokens=max_tok, use_cache=True)
-        attempts = [ base_full, base_rep, base_simple ]
-        output, last_err = None, None
         with torch.no_grad():
-            for kw in attempts:
-                try:
-                    output = self.model.generate(**kw)
-                    if _LA_DEBUG:
-                        print(f"🔧 [DEBUG] generate() OK keys: {list(kw.keys())}")
-                    break
-                except TypeError as e:  # kwarg không được hỗ trợ → thử rút gọn hơn
-                    if _LA_DEBUG:
-                        print(f"🔧 [DEBUG] TypeError keys {list(kw.keys())}: {e}")
-                    last_err = e
-                    continue
-                except RuntimeError as e:
-                    # CUBLAS_STATUS_EXECUTION_FAILED thường bị nhầm là bug kernel,
-                    # nhưng cũng CÓ THỂ chỉ là OOM đội lốt (cuBLAS không cấp phát
-                    # được workspace khi VRAM gần đầy). In rõ số liệu để phân biệt
-                    # NGAY LÚC CRASH thay vì đoán mò sau đó.
-                    if torch.cuda.is_available():
-                        try:
-                            alloc = torch.cuda.memory_allocated() / 1024**3
-                            reserved = torch.cuda.memory_reserved() / 1024**3
-                            total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-                            free_frac = 1 - reserved / total
-                            print("=" * 74)
-                            print(f"💥 RuntimeError trong generate(): {e}")
-                            print(f"   GPU Mem lúc crash: allocated={alloc:.1f}GB reserved={reserved:.1f}GB "
-                                  f"/ total={total:.1f}GB (còn trống ước ~{free_frac*100:.0f}%)")
-                            if free_frac < 0.08:
-                                print("   ⚠️  VRAM gần cạn lúc crash → NHIỀU KHẢ NĂNG là OOM đội lốt cuBLAS,"
-                                      " không phải lỗi kernel. Thử giảm --n, giảm max_new_tokens, hoặc ảnh"
-                                      " nhỏ hơn.")
-                            else:
-                                print("   ℹ️  VRAM còn nhiều lúc crash → khó là OOM thuần tuý. Xem traceback"
-                                      " phía trên (CUDA_LAUNCH_BLOCKING=1 đã bật → dòng cuối là thủ phạm thật).")
-                            print("=" * 74, flush=True)
-                        except Exception:
-                            pass
-                    raise
-        if output is None:
-            raise last_err if last_err else RuntimeError("generate() thất bại")
+            output = self.model.generate(**inputs, max_new_tokens=max_tok,
+                                         do_sample=False, use_cache=True,
+                                         tokenizer=self.tokenizer)
 
         # generate có thể trả token ids (tensor / list) hoặc chuỗi đã decode.
         if isinstance(output, str):
