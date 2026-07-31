@@ -94,6 +94,13 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None, 
         except TypeError:
             continue
 
+    # DetectionsSmoother: giữ box qua frame detect TRƯỢT (fill gap) → hết nhấp nháy
+    # + track ổn định hơn (LocateAnything bắt lúc có lúc không).
+    try:
+        smoother = sv.DetectionsSmoother(length=8)
+    except Exception:  # noqa: BLE001 — bản supervision cũ không có
+        smoother = None
+
     line = None
     polys = []
     zones_px = [np.array([[int(x), int(y)] for x, y in z.to_pixels(w, h)], dtype=np.int32)
@@ -134,6 +141,11 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None, 
         res.total_detections += len(dr.detections)
         det = _to_sv(dr.detections, sv, np)
         det = tracker.update_with_detections(det)
+        if smoother is not None:                 # làm mượt: box giữ qua frame trượt → hết nhấp nháy
+            try:
+                det = smoother.update_with_detections(det)
+            except Exception:  # noqa: BLE001
+                pass
 
         if det.tracker_id is not None:
             for tid in det.tracker_id:
