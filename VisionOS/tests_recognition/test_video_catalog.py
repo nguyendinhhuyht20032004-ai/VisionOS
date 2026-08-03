@@ -197,17 +197,32 @@ def test_new_local_conveyor_videos_present_and_on_disk():
     import os
 
     byk = {v.scenario.key: v for v in CATALOG}
+    # Vạch đã ĐẶT LẠI theo hướng dòng chảy THẬT (phân tích optical-flow):
+    #   con lăn = vật trôi lên-chéo → vạch DỌC;  belt/cà chua = vật đi ngang → vạch NGANG.
+    orient = {"conv_rollers": "vertical", "conv_belt": "horizontal", "conv_tomato": "horizontal"}
     for k in ("conv_rollers", "conv_belt", "conv_tomato"):
         assert k in byk, f"thiếu video mới {k}"
         v = byk[k]
         assert v.local and v.task == "conveyor"
         assert v.scenario.counting_type == "line"
-        # vạch NGANG (vật đi xuống): y1≈y2, x trải rộng
         (x1, y1), (x2, y2) = v.scenario.line_start_pct, v.scenario.line_end_pct
-        assert abs(y1 - y2) < 1e-6 and abs(x1 - x2) > 50, k
+        if orient[k] == "vertical":                       # vạch DỌC: x1≈x2, y trải rộng
+            assert abs(x1 - x2) < 1e-6 and abs(y1 - y2) > 50, k
+        else:                                             # vạch NGANG: y1≈y2, x trải rộng
+            assert abs(y1 - y2) < 1e-6 and abs(x1 - x2) > 50, k
         # file ĐÃ commit vào repo
         code_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         assert os.path.exists(os.path.join(code_dir, v.local)), f"chưa commit: {v.local}"
+
+
+def test_conveyor_zone_scenario_for_dense_objects():
+    # cà chua DÀY/NHANH → có thêm bài ĐẾM VÙNG (occupancy) bền hơn đếm-qua-vạch
+    byk = {v.scenario.key: v for v in CATALOG}
+    assert "conv_tomato_zone" in byk, "thiếu bài đếm VÙNG cho cà chua"
+    v = byk["conv_tomato_zone"]
+    assert v.task == "conveyor" and v.scenario.counting_type == "zone"
+    assert v.local and v.local.endswith("tomatoes_sorting.mp4")
+    assert v.scenario.build_zones(), "vùng rỗng"
 
 
 def test_broken_pexels_conveyors_removed():
