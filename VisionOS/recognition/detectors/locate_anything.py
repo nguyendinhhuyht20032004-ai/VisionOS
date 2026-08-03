@@ -20,34 +20,27 @@ __all__ = ["LocateAnythingDetector", "patch_modeling_source"]
 
 
 def patch_modeling_source(code: str) -> str:
-    """Vá nội dung các file model (thuần chuỗi → test được).
+    """Vá nội dung file model — MẶC ĐỊNH đúng như NOTEBOOK KAGGLE ĐÃ CHẠY ĐƯỢC.
 
-    Bốn vá, đều **idempotent** (vá lại lần nữa không đổi):
+    Notebook chỉ vá **hai** thứ (và chạy tốt trên transformers 4.57.1):
 
-    1. ``import decord`` / ``import lmdb`` ở đầu file khiến
-       ``transformers.check_imports`` **bắt buộc** cài 2 gói này (decord không có
-       wheel cho Python 3.12 → lỗi). Chúng chỉ dùng cho video/dataset, KHÔNG cần
-       khi suy luận ảnh → bọc vào ``try/except`` để check_imports bỏ qua.
-    2. **``config.rope_theta`` không có trong ``Qwen2Config`` của transformers cũ**
-       → dùng ``getattr`` với giá trị mặc định 1_000_000.0 (chuẩn Qwen2).
-    3. **``DynamicCache.to_legacy_cache()`` bị GỠ ở transformers mới** → bỏ lời gọi,
-       trả thẳng đối tượng ``Cache`` (định dạng chuẩn của bản mới).
-    4. **``DynamicCache.from_legacy_cache()`` cũng bị GỠ** → dòng ngay sau đó gọi
-       ``past_key_values.get_seq_length()`` nên KẾT QUẢ phải là một ``Cache``. Thay
-       bằng: đã là Cache thì giữ, còn ``None``/tuple rỗng (bước đầu generate) thì tạo
-       ``DynamicCache()`` rỗng. Dùng ``hasattr(x, 'get_seq_length')`` để nhận diện.
+    1. ``import decord`` / ``import lmdb`` → bọc ``try/except`` để
+       ``transformers.check_imports`` không bắt cài (decord không có wheel Python
+       3.12). Chỉ import-time, KHÔNG đổi phép tính của model.
+    2. ``pixel_values = pixel_values.to(self.language_model.dtype)`` →
+       ``.to(torch.float16)``: T4 (Turing) không có kernel bfloat16 → phải float16.
+       **Đây là vá THEN CHỐT để model nhận diện được trên T4.**
 
-    Vá 3+4 làm luồng cache **độc lập phiên bản**: chạy được dù transformers là
-    4.57.1 (NVIDIA test) hay bản mới hơn (Kaggle mặc định).
-
-    KHÔNG còn ép ``pixel_values`` sang float16 nữa: model gốc đã
-    ``pixel_values.to(self.language_model.dtype)`` — tự khớp dtype khi nạp (bf16
-    là mặc định; float16 gây tràn → CUBLAS_STATUS_INTERNAL_ERROR ở MLP).
+    ⚠️ Các vá cũ (rope_theta / to_legacy_cache / from_legacy_cache / RoPE cache
+    auto-extend / trả full cache) ĐÃ GỠ khỏi mặc định: trên 4.57.1 chúng ĐỔI phép
+    tính RoPE/cache khiến model **trả rỗng** (det/frame=0). Chỉ bật lại khi chạy
+    transformers KHÁC 4.57.x (cần shim tương thích): đặt env ``LA_COMPAT_PATCH=1``.
     """
+    import os
     import re
 
-    # chỉ khớp import ở CỘT 0 (top-level) → sau khi bọc vào try (thụt lề) sẽ không
-    # khớp nữa ⇒ idempotent.
+    # (1) decord/lmdb: import-time guard (vô hại, cần cho Python 3.12). Idempotent:
+    # sau khi bọc vào try (thụt lề) sẽ không khớp '^import' ở cột 0 nữa.
     code = re.sub(
         r"(?m)^(import (?:decord|lmdb)\b.*)$",
         "try:\n    \\1\nexcept Exception:\n    pass",
@@ -58,53 +51,32 @@ def patch_modeling_source(code: str) -> str:
         "try:\n    \\1\nexcept Exception:\n    pass",
         code,
     )
-    # rope_theta: Qwen2Config cũ không set attribute này dù config.json có.
-    # getattr với default 1_000_000.0 (Qwen2 standard) → idempotent vì pattern
-    # đã đổi, lần vá sau không còn khớp chuỗi gốc nữa.
+    # (2) VÁ THEN CHỐT (giống notebook): pixel_values → float16 cho T4. Idempotent
+    # nhờ marker '# T4 fix' (vá lại không khớp chuỗi gốc nữa).
     code = code.replace(
-        "self.rope_theta = config.rope_theta",
-        "self.rope_theta = getattr(config, 'rope_theta', 1_000_000.0)",
+        "pixel_values = pixel_values.to(self.language_model.dtype)",
+        "pixel_values = pixel_values.to(torch.float16)  # T4 fix",
     )
-    # to_legacy_cache(): transformers mới đã gỡ hàm này khỏi DynamicCache. Bundled
-    # Qwen2 gọi ``next_decoder_cache.to_legacy_cache()`` để quy về tuple cũ → lỗi.
-    # Bỏ lời gọi (X.to_legacy_cache() → X): trả thẳng đối tượng Cache là ĐÚNG với
-    # bản mới; vòng lặp generate sau đó nhận Cache và không cần convert nữa.
-    # Idempotent: sau khi thay, không còn ".to_legacy_cache()" để khớp.
-    code = re.sub(r"(\w+)\.to_legacy_cache\(\)", r"\1", code)
-    # from_legacy_cache(): cũng bị gỡ ở transformers mới. Dòng ngay sau nó gọi
-    # ``x.get_seq_length()`` nên x PHẢI là Cache. Trong vòng generate, dòng này chỉ
-    # chạy ở bước đầu khi x là None HOẶC tuple rỗng () → cả hai đều cần tạo
-    # DynamicCache() rỗng; nếu x đã là Cache thì giữ nguyên. Nhận diện bằng
-    # ``hasattr(x, 'get_seq_length')`` (chỉ Cache mới có).
-    #
-    # Chuẩn hoá CẢ HAI dạng để an toàn khi snapshot đã bị bản vá TRƯỚC sửa 1 lần:
-    #   (a) dạng gốc:      DynamicCache.from_legacy_cache(x)
-    #   (b) dạng vá cũ:    (DynamicCache() if x is None else x)   ← thiếu, gây lỗi tuple
-    # → cùng đưa về:       (x if hasattr(x, 'get_seq_length') else DynamicCache())
-    _cache_fix = r"(\1 if hasattr(\1, 'get_seq_length') else DynamicCache())"
-    code = re.sub(r"DynamicCache\.from_legacy_cache\((\w+)\)", _cache_fix, code)
-    code = re.sub(r"\(DynamicCache\(\) if (\w+) is None else \1\)", _cache_fix, code)
 
-    # RoPE cache auto-extend: bundled Qwen2RotaryEmbedding tạo cos/sin cache 1 lần
-    # với max_position_embeddings từ config (có thể rất NHỎ). Khi seq_len thực tế
-    # (ảnh + text tokens) vượt quá, apply_rotary_pos_emb báo IndexError. Vá
-    # forward() của RotaryEmbedding để tự mở rộng cache khi cần — cách tương tự
-    # transformers mới xử lý (trước 4.46 phải gọi thủ công _set_cos_sin_cache).
-    #
-    # Thay thế pattern: nếu forward() kiểm tra seq_len > max_seq_len_cached, đảm bảo
-    # nó cũng kiểm tra khi chưa có cache (lần đầu hoặc bị clear). Idempotent vì
-    # pattern gốc chỉ khớp 1 lần.
-    code = code.replace(
-        "if seq_len > self.max_seq_len_cached",
-        "if seq_len > self.max_seq_len_cached or not hasattr(self, 'cos_cached') or self.cos_cached is None",
-    )
-    # Ngăn chặn slice RoPE cache theo seq_len. Trong hybrid decoding của Qwen2, 
-    # position_ids có thể lớn hơn seq_len (kv_seq_len). Slice sẽ làm cos[position_ids]
-    # đọc vượt quá mảng, gây hỏng CUDA stream và báo lỗi ở SDPA. Trả về full cache!
-    code = code.replace(
-        "return self.cos_cached[:seq_len].to(dtype=x.dtype), self.sin_cached[:seq_len].to(dtype=x.dtype)",
-        "return self.cos_cached.to(dtype=x.dtype), self.sin_cached.to(dtype=x.dtype)",
-    )
+    # ⚠️ Shim tương thích transformers ≠ 4.57.x — MẶC ĐỊNH TẮT (đổi RoPE/cache làm
+    # model rỗng trên 4.57.1). Bật bằng LA_COMPAT_PATCH=1 khi buộc dùng bản khác.
+    if os.environ.get("LA_COMPAT_PATCH"):
+        code = code.replace(
+            "self.rope_theta = config.rope_theta",
+            "self.rope_theta = getattr(config, 'rope_theta', 1_000_000.0)",
+        )
+        code = re.sub(r"(\w+)\.to_legacy_cache\(\)", r"\1", code)
+        _cache_fix = r"(\1 if hasattr(\1, 'get_seq_length') else DynamicCache())"
+        code = re.sub(r"DynamicCache\.from_legacy_cache\((\w+)\)", _cache_fix, code)
+        code = re.sub(r"\(DynamicCache\(\) if (\w+) is None else \1\)", _cache_fix, code)
+        code = code.replace(
+            "if seq_len > self.max_seq_len_cached",
+            "if seq_len > self.max_seq_len_cached or not hasattr(self, 'cos_cached') or self.cos_cached is None",
+        )
+        code = code.replace(
+            "return self.cos_cached[:seq_len].to(dtype=x.dtype), self.sin_cached[:seq_len].to(dtype=x.dtype)",
+            "return self.cos_cached.to(dtype=x.dtype), self.sin_cached.to(dtype=x.dtype)",
+        )
     return code
 
 

@@ -86,11 +86,14 @@ class LocateAnythingDetector:
         #   debug, không phụ thuộc heuristic chọn kernel của cuBLAS/cuDNN). Đồng thời
         #   thêm CUDA_LAUNCH_BLOCKING=1 (đặt ở run_eval.py, trước khi torch được nạp)
         #   để nếu VẪN lỗi thì traceback trỏ đúng dòng thật, không còn đoán mò.
+        # MẶC ĐỊNH: KHÔNG can thiệp backend SDPA — notebook Kaggle CHẠY ĐƯỢC không cần.
+        # (Ép math-backend + upcast + vá RoPE ở bản trước làm model TRẢ RỖNG → det/frame=0.)
+        # Chỉ bật lại khi thật sự gặp CUBLAS crash trên Turing: đặt LA_MATH_SDP=1.
+        cc = (0, 0)
         if torch.cuda.is_available() and not self._cpu_debug:
             cc = torch.cuda.get_device_capability()
-            if cc[0] < 8:  # Turing (T4), Volta, Pascal...
-                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} (<8.0) → ép SDPA math-backend (né kernel hợp "
-                      "nhất từng crash CUBLAS_STATUS_EXECUTION_FAILED trên Turing).")
+            if cc[0] < 8 and os.environ.get("LA_MATH_SDP"):  # Turing (T4)…
+                print(f"⚠️  GPU cc={cc[0]}.{cc[1]} → ép SDPA math-backend (LA_MATH_SDP=1).")
                 torch.backends.cuda.enable_flash_sdp(False)
                 torch.backends.cuda.enable_mem_efficient_sdp(False)
                 torch.backends.cuda.enable_math_sdp(True)
@@ -205,12 +208,11 @@ class LocateAnythingDetector:
                 self.model = self.model.to(device="cuda:0", dtype=self.dtype)
 
         # =========================================================================
-        # CHUỖI VÁ SÂU DƯỚI ĐÂY (global SDPA / Linear / DecoderLayer / MLP) chỉ còn
-        # ý nghĩa khi ĐANG DÙNG attn_implementation="sdpa" (đường cũ, giữ lại để đối
-        # chiếu qua LA_ATTN=sdpa). Với "eager" (mặc định mới), model không gọi
-        # F.scaled_dot_product_attention nữa → patch vô nghĩa, CHỦ ĐỘNG BỎ QUA để
-        # giảm bề mặt lỗi (ít code tự viết chen vào forward gốc của model hơn).
-        if torch.cuda.is_available() and not self._cpu_debug and cc[0] < 8 and attn_impl == "sdpa":
+        # ⚠️ CÁC VÁ SÂU DƯỚI ĐÂY MẶC ĐỊNH TẮT — chúng làm model TRẢ RỖNG (det/frame=0)
+        # trên transformers 4.57.1, trong khi notebook Kaggle (KHÔNG có các vá này)
+        # chạy tốt. Chỉ bật lại để CHẨN ĐOÁN crash cũ: LA_PATCH_SDPA=1 / LA_PATCH_ROTARY=1.
+        if (os.environ.get("LA_PATCH_SDPA") and torch.cuda.is_available()
+                and not self._cpu_debug and cc[0] < 8 and attn_impl == "sdpa"):
             if not getattr(torch.nn.functional, "_la_patched_sdpa", False):
                 orig_sdpa = torch.nn.functional.scaled_dot_product_attention
                 def safe_sdpa(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, **kwargs):
@@ -233,8 +235,10 @@ class LocateAnythingDetector:
                 print("🔧 Patched Global SDPA: float16→float32 upcast on Turing GPU (avoids cuBLAS crash)")
 
             # All Linear/MLP/lm_head nan_to_num patches removed because they corrupt the model's spatial reasoning.
-        # Patch RotaryEmbedding để không bị index out of bounds khi model xài custom position_ids
-        if hasattr(self.model, "language_model") and hasattr(self.model.language_model, "model"):
+        # Vá RotaryEmbedding: MẶC ĐỊNH TẮT (trả full cache làm sai vị trí → model rỗng).
+        # Bật lại chỉ khi gặp IndexError RoPE thật sự: LA_PATCH_ROTARY=1.
+        if os.environ.get("LA_PATCH_ROTARY") and hasattr(self.model, "language_model") \
+                and hasattr(self.model.language_model, "model"):
             try:
                 rotary_emb_cls = type(self.model.language_model.model.layers[0].self_attn.rotary_emb)
                 if not getattr(rotary_emb_cls, "_la_patched", False):
