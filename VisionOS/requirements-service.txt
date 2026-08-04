@@ -1,6 +1,15 @@
-# Phụ thuộc RIÊNG cho service AI (recognition/service). Cài thêm ngoài requirements chính.
+# Phụ thuộc cho AI SERVICE đếm theo camera (recognition/service) — dùng cho Docker.
 #   pip install -r requirements-service.txt
+# --- API ---
 fastapi>=0.110
 uvicorn[standard]>=0.29
-# (opencv-python-headless, supervision, numpy: đã có ở phần counting;
-#  torch/transformers/ultralytics: cần cho detector khi chạy thật.)
+python-multipart>=0.0.9          # nhận upload ảnh/frame (để vẽ vạch/vùng)
+# --- Thị giác máy: detect (YOLO) + track/đếm (supervision) ---
+ultralytics>=8.2                 # YOLOv8 / YOLO11
+supervision>=0.21                # ByteTrack + LineZone + PolygonZone + annotator
+opencv-python-headless>=4.9
+numpy>=1.24
+# torch: MẶC ĐỊNH bản CPU (chạy mọi nơi). GPU → xem Dockerfile (ARG TORCH_CUDA=cu121)
+torch>=2.2
+# --- Vector database (ReID / tìm kiếm / lịch sử sự kiện) ---
+qdrant-client>=1.9

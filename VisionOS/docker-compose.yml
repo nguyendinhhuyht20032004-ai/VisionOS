@@ -1,0 +1,38 @@
+# AI service (FastAPI + YOLO + supervision) + Qdrant (vector DB).
+#   docker compose up --build
+# Mở: http://localhost:8000  (Qdrant dashboard: http://localhost:6333/dashboard)
+services:
+  api:
+    build:
+      context: .
+      args:
+        TORCH_CUDA: cpu          # đổi 'cu121' để build bản GPU
+    ports:
+      - "8000:8000"
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - YOLO_WEIGHTS=yolov8x.pt   # yolov8m.pt cho nhanh; yolov8x cho recall cao
+      - YOLO_IMGSZ=1280
+      - YOLO_CONF=0.15
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+    # --- GPU: bỏ comment khối dưới + build với TORCH_CUDA=cu121 ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"              # REST/gRPC + dashboard
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
