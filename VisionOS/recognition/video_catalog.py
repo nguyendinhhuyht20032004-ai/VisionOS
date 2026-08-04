@@ -50,7 +50,7 @@ _PEXELS_QUALITIES = (
 @dataclass(frozen=True)
 class VideoScenario:
     name: str
-    task: str                          # "vehicles" | "conveyor" | "people"
+    task: str                          # "vehicles" | "people"  (conveyor/sản phẩm đã bỏ)
     scenario: CountScenario
     source: str
     filename: str
@@ -150,69 +150,12 @@ _VEHICLES = [
 ]
 
 # --------------------------------------------------------------------------- #
-# 📦 DÂY CHUYỀN SẢN XUẤT — nhiều video + NHIỀU QUERY KHÓ (open-vocab)
-#    Nguồn Pexels lấy từ TIÊU ĐỀ TRANG (Pexels tự mô tả nội dung) → tin cậy hơn.
+# 📦 DÂY CHUYỀN / ĐẾM SẢN PHẨM — ĐÃ BỎ.
+#   Hệ thống hiện CHỈ đếm NGƯỜI + PHƯƠNG TIỆN bằng YOLO + supervision (YOLO làm rất
+#   tốt 2 bài này). Phần đếm sản phẩm (kiện hàng/cà chua) dùng LocateAnything-3B đã
+#   tạm gỡ khỏi catalog để giữ hệ thống đơn giản, đúng trọng tâm.
 # --------------------------------------------------------------------------- #
-_CONVEYOR = [
-    VideoScenario("Nhà máy chiết chai (supervision)", "conveyor",
-        _sc("conv_milk", "Đếm chai", "bottle", "YOLO-NAS-S",
-            (14.5, 0.7), (15.3, 99.6), "Qua vạch", "Ngược", "CENTER", (1280, 720),
-            "Vạch DỌC lệch trái theo chỗ chai chạy (user vẽ)."),
-        "Roboflow supervision · dây chuyền chiết sữa — TIN CẬY", "milk-bottling-plant.mp4",
-        asset="MILK_BOTTLING_PLANT",
-        queries=("bottle", "plastic bottle", "milk bottle", "bottle cap",
-                 "a bottle without a cap", "a fallen bottle"),
-        tips="'bottle' chạy YOLO nhanh; query khó cần --model locate."),
-    # === Video THẬT của user (đã commit repo sample_videos/) — CÓ sản phẩm chạy rõ ===
-    # (Đã BỎ 4 video Pexels lỗi: 4156510/30715848/4473250/4473187 — không có sản phẩm
-    #  chạy trên chuyền.) Vật đi XUỐNG về phía camera → vạch NGANG; thùng/cà chua KHÔNG
-    #  thuộc COCO → open-vocab LocateAnything-3B.
-    VideoScenario("Kiện hàng — băng chuyền con lăn (user)", "conveyor",
-        _sc("conv_rollers", "Đếm kiện hàng con lăn", "object", "LocateAnything-3B",
-            (50.0, 0.0), (50.0, 100.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
-            "Thùng trôi LÊN-CHÉO-PHẢI (phân tích optical-flow) → vạch DỌC x=50 cắt ngang "
-            "dòng đi. (Vạch ngang cũ y=65 chỉ bắt ~5; dọc x=50 bắt ~23 — tốt nhất.)"),
-        "User upload · kho hàng, thùng carton trên băng chuyền con lăn",
-        "packages_rollers.mp4", local="sample_videos/packages_rollers.mp4",
-        # prompt DỄ→KHÓ để test đếm open-vocab
-        queries=("object", "box", "package", "carton box",
-                 "a cardboard box", "a brown box", "a stack of boxes"),
-        tips="Prompt 'object'/'box' cho ra box TỪNG VẬT (đếm tốt); mô tả khó ('a brown box') "
-             "để test open-vocab. Vạch DỌC x=50 (đổi bằng --line '50,0,50,100')."),
-    VideoScenario("Kiện hàng — băng chuyền có nhãn (user)", "conveyor",
-        _sc("conv_belt", "Đếm kiện hàng belt", "object", "LocateAnything-3B",
-            (0.0, 50.0), (100.0, 50.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
-            "TRẠM ĐÓNG GÓI thủ công (dòng chảy YẾU — thùng được xếp tay, không trôi đều) → "
-            "vạch NGANG y=50 là tốt nhất nhưng đếm sẽ ÍT (~5). Đây là hạn chế của cảnh, "
-            "KHÔNG phải model: dùng bài con lăn/cà chua để thấy đếm-qua-vạch rõ hơn."),
-        "User upload · công nhân phân loại, thùng carton có nhãn/mã vạch",
-        "packages_belt.mp4", local="sample_videos/packages_belt.mp4",
-        queries=("object", "box", "package", "carton box",
-                 "a cardboard box", "a box with a label"),
-        tips="Cảnh đóng gói tay → ít vật CẮT vạch. Muốn số 'có bao nhiêu thùng' thì xem cột "
-             "tracks, hoặc đổi sang đếm VÙNG (--zone)."),
-    VideoScenario("Cà chua — dây chuyền phân loại (user)", "conveyor",
-        _sc("conv_tomato", "Đếm cà chua", "tomato", "LocateAnything-3B",
-            (0.0, 70.0), (100.0, 70.0), "Qua vạch", "Ngược", "CENTER", (960, 540),
-            "Cà chua trôi CHÉO LÊN (optical-flow) → vạch NGANG y=70 cắt được nhiều nhất "
-            "(~24). Cà chua DÀY & NHANH: đếm-qua-vạch nhạy với tốc độ model — chạy stride=1, "
-            "đủ frame; xem thêm bài ĐẾM VÙNG nếu track đứt nhiều."),
-        "User upload · nhà máy phân loại cà chua trên dây chuyền inox",
-        "tomatoes_sorting.mp4", local="sample_videos/tomatoes_sorting.mp4",
-        queries=("tomato", "object", "fruit", "a red tomato", "a ripe tomato",
-                 "a cluster of tomatoes", "a green tomato")),
-    # Cà chua DÀY/NHANH → đếm-qua-vạch dễ hụt khi model chậm (track đứt). Bài ĐẾM VÙNG
-    # (occupancy: bao nhiêu quả ĐANG trong vùng / đỉnh) BỀN hơn — không cần track liên tục.
-    VideoScenario("Cà chua — đếm trong VÙNG (user)", "conveyor",
-        _zone_multi("conv_tomato_zone", "Đếm cà chua trong vùng",
-                    (((18.0, 28.0), (82.0, 28.0), (82.0, 82.0), (18.0, 82.0)),),
-                    res=(960, 540), prompt="tomato", anchor="CENTER"),
-        "User upload · phân loại cà chua — bài ĐẾM VÙNG (bền khi vật dày/nhanh)",
-        "tomatoes_sorting.mp4", local="sample_videos/tomatoes_sorting.mp4",
-        queries=("tomato", "a red tomato", "a ripe tomato"),
-        tips="Đếm số quả ĐANG trong vùng (đỉnh = đông nhất cùng lúc) — không phụ thuộc track "
-             "liên tục nên ổn định hơn vạch với cảnh dày/nhanh."),
-]
+_CONVEYOR: List[VideoScenario] = []
 
 # --------------------------------------------------------------------------- #
 # 🚶 NGƯỜI — chỉ supervision (đặt tên theo nội dung, tin cậy)
@@ -313,20 +256,7 @@ QUERY_SUITES = {
                "a vehicle carrying cargo"],
         "tiếng Việt": ["xe ô tô", "xe tải", "xe máy", "xe buýt"],
     },
-    "conveyor": {
-        "chai": ["bottle", "plastic bottle", "glass bottle", "milk bottle", "water bottle"],
-        "trạng thái chai": ["a bottle with a cap", "a bottle without a cap",
-                           "an empty bottle", "a full bottle", "a fallen bottle"],
-        "hộp/kiện": ["object", "box", "package", "carton box", "a cardboard box",
-                    "a brown box", "a sealed box", "a box with a label", "a stack of boxes"],
-        "cà chua/quả": ["tomato", "fruit", "a red tomato", "a ripe tomato",
-                       "a green tomato", "a cluster of tomatoes"],
-        "sản phẩm": ["product on the conveyor", "a packaged product", "a defective product",
-                    "an item being assembled"],
-        "đặc điểm/đếm": ["a red product", "the largest item", "the smallest item",
-                        "a shiny object"],
-        "tiếng Việt": ["chai nước", "thùng carton", "sản phẩm lỗi", "chai nhựa"],
-    },
+    # (Bộ suite "conveyor"/sản phẩm ĐÃ BỎ — hệ thống chỉ đếm người + phương tiện.)
 }
 
 

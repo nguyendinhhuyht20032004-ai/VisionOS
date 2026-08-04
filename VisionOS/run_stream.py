@@ -5,10 +5,10 @@
 chạy đúng engine của service (detect → track → smooth → đếm) rồi XUẤT video annotate
 + in số đếm mỗi frame.
 
-VÍ DỤ (Colab/Kaggle — không cần camera):
-    !python run_stream.py --source sample_videos/tomatoes_sorting.mp4 \
-        --prompt tomato --orient horizontal --line-pos 0.72 \
-        --max-frames 60 --out /kaggle/working/out.mp4
+VÍ DỤ (Colab/Kaggle — không cần camera, dùng video mẫu supervision):
+    !python run_stream.py --source people-walking.mp4 \
+        --prompt person --orient horizontal --line-pos 0.5 \
+        --max-frames 200 --out /kaggle/working/out.mp4
 
 Camera THẬT sau này (chỉ đổi --source):
     python run_stream.py --source "rtsp://user:pass@ip:554/stream" --prompt person \
@@ -63,7 +63,7 @@ def iter_frames(source, max_frames):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", required=True, help="file .mp4 | rtsp://… | http://… | 0 (webcam)")
-    ap.add_argument("--prompt", default="person", help="đối tượng: person/car/object/carton box/tomato…")
+    ap.add_argument("--prompt", default="person", help="đối tượng: person / car / vehicle / truck / bus")
     ap.add_argument("--counting-type", default="line", choices=["line", "zone"])
     ap.add_argument("--orient", default="horizontal", choices=["horizontal", "vertical"],
                     help="hướng vạch khi dùng --line-pos")

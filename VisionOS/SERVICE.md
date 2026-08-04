@@ -9,14 +9,14 @@ cho sản phẩm open-vocab (thùng/cà chua…).
 Chưa có camera? Coi 1 file `.mp4` là nguồn — chạy đúng engine của service rồi xuất
 video annotate + in số đếm. **Chạy được ngay trên Colab/Kaggle (có GPU):**
 ```bash
-# đếm cà chua trên video mẫu (đã có sẵn trong repo)
-python run_stream.py --source sample_videos/tomatoes_sorting.mp4 \
-    --prompt tomato --orient horizontal --line-pos 0.72 --max-frames 60 \
+# đếm NGƯỜI qua vạch (video mẫu supervision, tự tải)
+python run_stream.py --source people-walking.mp4 \
+    --prompt person --orient horizontal --line-pos 0.5 --max-frames 200 \
     --out out.mp4
 
-# đếm kiện hàng
-python run_stream.py --source sample_videos/packages_belt.mp4 \
-    --prompt object --orient horizontal --line-pos 0.60 --max-frames 60 --out out.mp4
+# đếm PHƯƠNG TIỆN (car/truck/bus)
+python run_stream.py --source vehicles.mp4 \
+    --prompt vehicle --orient horizontal --line-pos 0.6 --max-frames 300 --out out.mp4
 ```
 In ra số đếm từng frame + lưu `out.mp4` (annotate). **Đây là cách xác minh hệ thống chạy
 hiệu quả mà không cần camera.** Khi có camera thật, chỉ đổi `--source` thành RTSP/URL/`0`.

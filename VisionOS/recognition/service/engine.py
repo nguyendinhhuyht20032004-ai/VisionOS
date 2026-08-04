@@ -72,9 +72,9 @@ class StreamingCounter:
         self.annos = None
         try:
             self.annos = {
-                "box": sv.RoundBoxAnnotator(color_lookup=sv.ColorLookup.TRACK, thickness=2),
-                "label": sv.LabelAnnotator(color_lookup=sv.ColorLookup.TRACK, text_scale=0.45),
-                "trace": sv.TraceAnnotator(color_lookup=sv.ColorLookup.TRACK, thickness=2, trace_length=30),
+                "box": sv.RoundBoxAnnotator(color_lookup=sv.ColorLookup.CLASS, thickness=2),
+                "label": sv.LabelAnnotator(color_lookup=sv.ColorLookup.CLASS, text_scale=0.45),
+                "trace": sv.TraceAnnotator(color_lookup=sv.ColorLookup.CLASS, thickness=2, trace_length=30),
                 "line": sv.LineZoneAnnotator(thickness=2, text_scale=0.7) if self.line is not None else None,
                 "zones": [sv.PolygonZoneAnnotator(zone=pz, color=sv.Color.GREEN, thickness=2)
                           for pz in self.polys],

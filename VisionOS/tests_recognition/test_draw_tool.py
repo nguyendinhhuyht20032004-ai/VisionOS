@@ -47,7 +47,7 @@ def test_draw_html_unique_uid(tmp_path):
 
 
 def test_find_by_name_and_key():
-    for kw, key in [("subway", "ppl_subway"), ("milk", "conv_milk"),
+    for kw, key in [("subway", "ppl_subway"), ("siêu thị", "ppl_store"),
                     ("giao lộ", "veh_junc")]:
         assert _find(kw).scenario.key == key
 
@@ -95,4 +95,4 @@ def test_gallery_all_uses_every_scenario_key():
         if v.scenario.key not in seen:
             seen.add(v.scenario.key)
             keys.append(v.scenario.key)
-    assert len(keys) == len({v.scenario.key for v in CATALOG}) >= 15
+    assert len(keys) == len({v.scenario.key for v in CATALOG}) >= 8

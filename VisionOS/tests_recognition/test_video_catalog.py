@@ -1,60 +1,51 @@
-"""Test catalog video test-đếm (thuần dữ liệu — không tải mạng, không GPU)."""
+"""Test catalog video test-đếm (thuần dữ liệu — không tải mạng, không GPU).
+
+Hệ thống hiện CHỈ đếm NGƯỜI + PHƯƠNG TIỆN (YOLO + supervision). Phần đếm SẢN PHẨM
+(dây chuyền/kiện hàng/cà chua, LocateAnything) đã BỎ khỏi catalog.
+"""
 
 from recognition.scenarios import CountScenario
 from recognition.video_catalog import (
     CATALOG,
     PEXELS_CDN,
     QUERY_SUITES,
-    RB_CDN,
     VideoScenario,
     by_task,
     suite_for,
 )
 
+TASKS = ("vehicles", "people")
+
 
 def test_catalog_large_and_typed():
-    # nhiều video (đã bỏ video sai nhãn) + rất nhiều query khó
-    assert len(CATALOG) >= 13
-    assert sum(len(v.queries) for v in CATALOG) >= 40   # tổng số ca test
+    assert len(CATALOG) >= 10
+    assert sum(len(v.queries) for v in CATALOG) >= 30    # tổng số ca test
     assert all(isinstance(v, VideoScenario) for v in CATALOG)
 
 
+def test_only_people_and_vehicles():
+    # CHỈ còn 2 bài toán; KHÔNG còn conveyor/sản phẩm.
+    assert {v.task for v in CATALOG} == set(TASKS)
+    assert by_task("conveyor") == []
+
+
 def test_many_angles_per_task():
-    # mỗi bài phải có NHIỀU video (nhiều góc quay), không chỉ 1
-    for task in ("vehicles", "conveyor", "people"):
-        assert len(by_task(task)) >= 4, f"{task} có quá ít video"
+    for task in TASKS:
+        assert len(by_task(task)) >= 3, f"{task} có quá ít video"
 
 
-def test_conveyor_and_vehicles_present():
-    assert any(v.asset == "MILK_BOTTLING_PLANT" for v in CATALOG)   # dây chuyền
-    assert any(v.task == "vehicles" for v in CATALOG)               # phương tiện
-    # có video SẢN PHẨM THẬT (user upload, nguồn local) trên băng chuyền
-    assert any(v.local and v.task == "conveyor" for v in CATALOG)
+def test_vehicles_and_people_present():
+    assert any(v.task == "vehicles" for v in CATALOG)
+    assert any(v.task == "people" for v in CATALOG)
 
 
 def test_no_mislabeled_videos():
-    # video nước chảy (1093662) đã bỏ; 3121459 (top-down COCO không đọc nổi) cũng đã bỏ,
-    # thay bằng video giao lộ RÕ NÉT của supervision cho bài đếm xe trong vùng.
     ids = {v.pexels_id for v in CATALOG}
     assert "1093662" not in ids                                     # video nước → đã bỏ
     assert "3121459" not in ids                                     # top-down khó → đã bỏ
 
 
-def test_conveyor_has_hard_queries_for_products():
-    # bài đếm sản phẩm phải có nhiều query khó (open-vocab) để test
-    for v in by_task("conveyor"):
-        assert len(v.queries) >= 2, f"{v.name} thiếu query để test"
-    # tổng số query sản phẩm đủ phong phú
-    total_q = sum(len(v.queries) for v in by_task("conveyor"))
-    assert total_q >= 15
-
-
-def test_conveyor_has_many_product_videos():
-    assert len(by_task("conveyor")) >= 4      # milk (supervision) + 3 video user thật
-
-
 def test_every_entry_has_exactly_one_source():
-    # mỗi video phải có ĐÚNG 1 nguồn: asset | url | pexels_id | local
     for v in CATALOG:
         srcs = [bool(v.asset), bool(v.url), bool(v.pexels_id), bool(v.local)]
         assert sum(srcs) == 1, f"{v.name} phải có đúng 1 nguồn, có {sum(srcs)}"
@@ -81,17 +72,13 @@ def test_scenario_keys_unique_and_identifier():
 
 
 def test_filenames_mp4():
-    # filename có thể TRÙNG (vd market-square.mp4 dùng cho cả bài vạch lẫn vùng —
-    # tải 1 lần dùng lại); chỉ yêu cầu đuôi .mp4. Định danh duy nhất là scenario.key.
     assert all(v.filename.endswith(".mp4") for v in CATALOG)
 
 
 def test_people_has_both_line_and_zone():
-    # user yêu cầu: tách bài đếm NGƯỜI thành cắt VẠCH (vào/ra) + đếm VÙNG (occupancy)
     ppl = by_task("people")
     types = {v.scenario.counting_type for v in ppl}
     assert "line" in types and "zone" in types
-    # market-square xuất hiện ở CẢ hai kiểu
     ms = [v for v in ppl if v.filename == "market-square.mp4"]
     assert {v.scenario.counting_type for v in ms} == {"line", "zone"}
 
@@ -99,24 +86,24 @@ def test_people_has_both_line_and_zone():
 def test_zone_scenarios_have_polygon():
     for v in CATALOG:
         if v.scenario.counting_type == "zone":
-            zones = v.scenario.build_zones()               # hỗ trợ 1 hoặc NHIỀU vùng
+            zones = v.scenario.build_zones()
             assert zones, f"{v.scenario.key} không có vùng nào"
             assert all(len(z.points_pct) >= 3 for z in zones), v.scenario.key
 
 
 def test_multi_zone_scenarios_merged_not_split():
-    # user yêu cầu: nhiều vùng trên 1 video → GỘP 1 bài (không tách từng vùng 1 case).
     byk = {v.scenario.key: v.scenario for v in CATALOG}
     assert "ppl_store_zone" in byk and len(byk["ppl_store_zone"].build_zones()) == 3
-    assert "veh_junc_zone" in byk                                   # bài đếm xe trong vùng (video rõ)
-    # KHÔNG còn scenario tách riêng từng vùng
+    assert "veh_junc_zone" in byk
     keys = set(byk)
     assert not any(k.endswith(("_z1", "_z2", "_z3", "_z4", "_z5")) for k in keys)
 
 
-def test_conv_action_removed():
+def test_no_conveyor_or_product_keys():
     keys = {v.scenario.key for v in CATALOG}
-    assert "conv_action" not in keys                      # user: không phải băng chuyền
+    for bad in ("conv_action", "conv_milk", "conv_rollers", "conv_belt", "conv_tomato",
+                "conv_tomato_zone"):
+        assert bad not in keys, f"scenario sản phẩm {bad} chưa bị xoá"
 
 
 def test_by_task_filter():
@@ -124,13 +111,7 @@ def test_by_task_filter():
     assert by_task("khong-co") == []
 
 
-def test_conveyor_line_vertical_vehicles_horizontal():
-    # Vạch user vẽ tay có thể hơi nghiêng → kiểm tra ĐỊNH HƯỚNG (dọc-ish / ngang-ish),
-    # không đòi hỏi x/y bằng tuyệt đối.
-    conv = by_task("conveyor")[0].scenario
-    dx = abs(conv.line_start_pct[0] - conv.line_end_pct[0])
-    dy = abs(conv.line_start_pct[1] - conv.line_end_pct[1])
-    assert dx < dy, "vạch chuyền phải DỌC-ish (vật chạy ngang)"
+def test_vehicles_line_is_horizontal():
     veh = by_task("vehicles")[0].scenario
     vdx = abs(veh.line_start_pct[0] - veh.line_end_pct[0])
     vdy = abs(veh.line_start_pct[1] - veh.line_end_pct[1])
@@ -138,104 +119,57 @@ def test_conveyor_line_vertical_vehicles_horizontal():
 
 
 def test_supervision_and_pexels_both_used():
-    assert any(v.asset for v in CATALOG)       # có nguồn supervision (hash-check)
-    assert any(v.pexels_id or v.url for v in CATALOG)  # có nguồn Pexels
+    assert any(v.asset for v in CATALOG)               # nguồn supervision
+    assert any(v.pexels_id or v.url for v in CATALOG)  # nguồn Pexels
 
 
 # --------------------------------------------------------------------------- #
-# QUERY SUITES — nhiều trường hợp test phân nhóm (như bảng Excel)
+# QUERY SUITES — nhiều trường hợp test phân nhóm
 # --------------------------------------------------------------------------- #
-def test_query_suites_cover_three_tasks_and_are_rich():
-    assert {"people", "vehicles", "conveyor"} <= set(QUERY_SUITES)
-    for task in ("people", "vehicles", "conveyor"):
+def test_query_suites_cover_both_tasks_and_are_rich():
+    assert set(TASKS) == set(QUERY_SUITES)             # chỉ people + vehicles
+    for task in TASKS:
         pairs = suite_for(task)
-        assert len(pairs) >= 20, f"suite {task} quá ít trường hợp"       # nhiều ca test
-        assert len({g for g, _ in pairs}) >= 5, f"suite {task} thiếu nhóm"  # nhiều nhóm
+        assert len(pairs) >= 20, f"suite {task} quá ít trường hợp"
+        assert len({g for g, _ in pairs}) >= 5, f"suite {task} thiếu nhóm"
 
 
 def test_suite_has_vietnamese_and_hard_cases():
-    # bảng Excel test cả prompt tiếng Việt + trường hợp khó/phủ định
     ppl = QUERY_SUITES["people"]
     assert "tiếng Việt" in ppl and any("người" in q for q in ppl["tiếng Việt"])
     assert any("khó" in g or "phủ định" in g for g in ppl)
 
 
 def test_suite_for_returns_group_query_pairs():
-    pairs = suite_for("conveyor")
+    pairs = suite_for("people")
     assert all(isinstance(g, str) and isinstance(q, str) and q for g, q in pairs)
     assert suite_for("khong-co-task") == []
 
 
 def test_suite_lite_is_small_and_representative():
-    # LITE (Colab/session ngắn): mỗi nhóm chỉ 1-2 query, ít hơn HẲN bản đầy đủ.
-    for task in ("people", "vehicles", "conveyor"):
+    from collections import Counter
+    for task in TASKS:
         full = suite_for(task)
         lite2 = suite_for(task, lite=True, per_group=2)
         lite1 = suite_for(task, lite=True, per_group=1)
         assert len(lite2) < len(full)
         assert len(lite1) <= len(lite2)
-        # mỗi nhóm ≤ per_group
-        from collections import Counter
         assert all(c <= 2 for c in Counter(g for g, _ in lite2).values())
         assert all(c == 1 for c in Counter(g for g, _ in lite1).values())
-    # màu = đỏ + trắng (đại diện) đứng đầu
     peo = suite_for("people", lite=True, per_group=2)
     colors = [q for g, q in peo if g == "màu/trang phục"]
     assert any("red" in q for q in colors) and any("white" in q for q in colors)
 
 
 def test_total_test_cases_is_large():
-    # tổng số ca test (suite + query per-video) đủ phong phú như yêu cầu
     total = sum(len(suite_for(t)) for t in QUERY_SUITES) + sum(len(v.queries) for v in CATALOG)
-    assert total >= 100
+    assert total >= 80
 
 
 # --------------------------------------------------------------------------- #
-# VIDEO USER (local) + XOÁ conveyor lỗi + phương tiện đa lớp
+# PHƯƠNG TIỆN đa lớp
 # --------------------------------------------------------------------------- #
-def test_new_local_conveyor_videos_present_and_on_disk():
-    import os
-
-    byk = {v.scenario.key: v for v in CATALOG}
-    # Vạch đã ĐẶT LẠI theo hướng dòng chảy THẬT (phân tích optical-flow):
-    #   con lăn = vật trôi lên-chéo → vạch DỌC;  belt/cà chua = vật đi ngang → vạch NGANG.
-    orient = {"conv_rollers": "vertical", "conv_belt": "horizontal", "conv_tomato": "horizontal"}
-    for k in ("conv_rollers", "conv_belt", "conv_tomato"):
-        assert k in byk, f"thiếu video mới {k}"
-        v = byk[k]
-        assert v.local and v.task == "conveyor"
-        assert v.scenario.counting_type == "line"
-        (x1, y1), (x2, y2) = v.scenario.line_start_pct, v.scenario.line_end_pct
-        if orient[k] == "vertical":                       # vạch DỌC: x1≈x2, y trải rộng
-            assert abs(x1 - x2) < 1e-6 and abs(y1 - y2) > 50, k
-        else:                                             # vạch NGANG: y1≈y2, x trải rộng
-            assert abs(y1 - y2) < 1e-6 and abs(x1 - x2) > 50, k
-        # file ĐÃ commit vào repo
-        code_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        assert os.path.exists(os.path.join(code_dir, v.local)), f"chưa commit: {v.local}"
-
-
-def test_conveyor_zone_scenario_for_dense_objects():
-    # cà chua DÀY/NHANH → có thêm bài ĐẾM VÙNG (occupancy) bền hơn đếm-qua-vạch
-    byk = {v.scenario.key: v for v in CATALOG}
-    assert "conv_tomato_zone" in byk, "thiếu bài đếm VÙNG cho cà chua"
-    v = byk["conv_tomato_zone"]
-    assert v.task == "conveyor" and v.scenario.counting_type == "zone"
-    assert v.local and v.local.endswith("tomatoes_sorting.mp4")
-    assert v.scenario.build_zones(), "vùng rỗng"
-
-
-def test_broken_pexels_conveyors_removed():
-    ids = {v.pexels_id for v in CATALOG}
-    for bad in ("4156510", "30715848", "4473250", "4473187"):
-        assert bad not in ids, f"video Pexels lỗi {bad} chưa bị xoá"
-    keys = {v.scenario.key for v in CATALOG}
-    for bad in ("conv_pkg", "conv_line", "conv_fac", "conv_close"):
-        assert bad not in keys, f"scenario lỗi {bad} chưa bị xoá"
-
-
 def test_vehicles_prompt_is_multiclass_vehicle():
-    # phần phương tiện đổi sang 'vehicle' → bắt CẢ car/truck/bus/motorcycle
     veh = by_task("vehicles")
     assert veh
     for v in veh:
@@ -245,13 +179,3 @@ def test_vehicles_prompt_is_multiclass_vehicle():
 def test_vehicle_alias_maps_to_all_vehicle_classes():
     from recognition.detectors.yolo_nas import COCO_ALIASES
     assert set(COCO_ALIASES["vehicle"]) == {"car", "motorcycle", "truck", "bus"}
-
-
-def test_download_video_returns_local_path():
-    from recognition.video_catalog import download_video
-
-    v = next(v for v in CATALOG if v.scenario.key == "conv_tomato")
-    p = download_video(v)
-    assert p.endswith("tomatoes_sorting.mp4")
-    import os
-    assert os.path.exists(p) and os.path.getsize(p) > 0

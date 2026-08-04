@@ -2,18 +2,18 @@
 """Chạy đếm trên NHIỀU video THẬT (catalog) + in scorecard — mở rộng bộ test.
 
 Tải video công khai (Roboflow supervision assets, không cần API key) rồi chạy
-detect → track → đếm cho từng kịch bản:
+detect → track → đếm cho từng kịch bản (CHỈ 2 bài YOLO làm tốt):
 
-  * ``vehicles`` — phương tiện vào/ra (cao tốc, giao lộ)
-  * ``conveyor`` — dây chuyền sản xuất (nhà máy chiết chai)
-  * ``people``   — người vào/ra (đi bộ, quảng trường, ga tàu)
+  * ``vehicles`` — phương tiện vào/ra + đếm vùng (cao tốc, giao lộ)
+  * ``people``   — người vào/ra + đếm vùng (đi bộ, quảng trường, ga tàu, siêu thị)
+
+(Đếm sản phẩm/dây chuyền bằng LocateAnything đã BỎ — hệ thống chỉ YOLO + supervision.)
 
 Ví dụ:
     python run_scenarios.py --list                          # xem catalog, KHÔNG tải
     python run_scenarios.py --task vehicles --max-frames 300
-    python run_scenarios.py --task conveyor
+    python run_scenarios.py --task people --save-dir out
     python run_scenarios.py --task all --max-frames 300
-    python run_scenarios.py --task conveyor --model locate --prompt "chai nhựa"
 """
 
 from __future__ import annotations
@@ -510,7 +510,7 @@ def run(args) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Chạy đếm trên nhiều video thật + scorecard")
-    ap.add_argument("--task", default="all", choices=["all", "vehicles", "conveyor", "people"])
+    ap.add_argument("--task", default="all", choices=["all", "vehicles", "people"])
     ap.add_argument("--model", default="auto", choices=["auto", "yolo", "locate"],
                     help="auto = theo scenario (mặc định YOLO cho car/person/bottle)")
     ap.add_argument("--prompt", default=None, help="ép 1 prompt cho mọi video")

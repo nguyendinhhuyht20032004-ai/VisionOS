@@ -33,6 +33,25 @@ def _ascii(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
 
 
+# Ánh xạ tên lớp → class_id ỔN ĐỊNH (giống chỉ số COCO). PHẢI cố định qua các frame để
+# ColorLookup.CLASS tô MÀU THEO LỚP nhất quán (car luôn 1 màu, truck màu khác) — nếu tính
+# lại theo từng frame thì id đổi → màu NHẤP NHÁY.
+_STABLE_CLASS_ID = {
+    "person": 0, "bicycle": 1, "car": 2, "motorcycle": 3, "airplane": 4, "bus": 5,
+    "train": 6, "truck": 7, "boat": 8, "bottle": 39,
+}
+_DYN_CLASS_ID: dict = {}
+
+
+def _class_id(name: str) -> int:
+    """id ổn định cho 1 tên lớp (COCO cố định; lớp lạ cấp id ≥100, giữ nguyên về sau)."""
+    if name in _STABLE_CLASS_ID:
+        return _STABLE_CLASS_ID[name]
+    if name not in _DYN_CLASS_ID:
+        _DYN_CLASS_ID[name] = 100 + len(_DYN_CLASS_ID)
+    return _DYN_CLASS_ID[name]
+
+
 def _to_sv(dets, sv, np):
     """List Detection (của mình) → sv.Detections (xyxy/confidence/class_id).
 
@@ -45,10 +64,9 @@ def _to_sv(dets, sv, np):
         return sv.Detections.empty()
     xyxy = np.array([[float(v) for v in d.bbox.as_xyxy()] for d in dets], dtype=float)
     conf = np.full(len(dets), 0.9, dtype=float)
-    # GIỮ tên lớp thật (car/truck/tomato…) để ĐÁNH NHÃN; class_id theo lớp → màu theo lớp.
+    # GIỮ tên lớp thật (car/truck…) để ĐÁNH NHÃN; class_id ỔN ĐỊNH → màu theo lớp không nhấp nháy.
     names = [(getattr(d, "label", None) or "object") for d in dets]
-    uniq = {n: i for i, n in enumerate(sorted(set(names)))}
-    cls = np.array([uniq[n] for n in names], dtype=int)
+    cls = np.array([_class_id(n) for n in names], dtype=int)
     return sv.Detections(xyxy=xyxy, confidence=conf, class_id=cls,
                          data={"class_name": np.array(names)})
 
@@ -121,9 +139,9 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None, 
     if writer is not None:
         try:
             annos = {
-                "box": sv.RoundBoxAnnotator(color_lookup=sv.ColorLookup.TRACK, thickness=2),
-                "label": sv.LabelAnnotator(color_lookup=sv.ColorLookup.TRACK, text_scale=0.45),
-                "trace": sv.TraceAnnotator(color_lookup=sv.ColorLookup.TRACK, thickness=2, trace_length=30),
+                "box": sv.RoundBoxAnnotator(color_lookup=sv.ColorLookup.CLASS, thickness=2),
+                "label": sv.LabelAnnotator(color_lookup=sv.ColorLookup.CLASS, text_scale=0.45),
+                "trace": sv.TraceAnnotator(color_lookup=sv.ColorLookup.CLASS, thickness=2, trace_length=30),
                 "line": sv.LineZoneAnnotator(thickness=2, text_scale=0.7) if line is not None else None,
                 "zones": [sv.PolygonZoneAnnotator(zone=pz, color=sv.Color.GREEN, thickness=2)
                           for pz in polys],
