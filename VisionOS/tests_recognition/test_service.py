@@ -92,6 +92,27 @@ def test_streaming_counter_counts_crossing_and_annotates():
     assert st["counting_type"] == "line"
 
 
+def test_make_scenario_fullscreen():
+    sc, kind = make_scenario("person", "fullscreen", resolution=(320, 180))
+    assert sc.counting_type == "fullscreen"
+    sc.validate()                                      # fullscreen KHÔNG cần vạch/vùng
+
+
+def test_streaming_counter_fullscreen_counts_whole_frame():
+    # TOÀN MÀN HÌNH: đếm mọi vật trong khung (in_frame/peak) + tổng track.
+    sc, _ = make_scenario("object", "fullscreen", resolution=(320, 180))
+    sc_counter = StreamingCounter(sc, _FakeDet(8), resolution=(320, 180))
+    out = None
+    for _ in range(8):
+        out = sc_counter.process(np.zeros((180, 320, 3), dtype="uint8"))
+    assert out.shape == (180, 320, 3)
+    st = sc_counter.stats()
+    assert st["counting_type"] == "fullscreen"
+    assert st["in_frame"] >= 1 and st["peak"] >= 1     # có vật trong khung
+    assert st["total"] >= 1                             # tổng vật khác nhau
+    assert sc_counter.line is None and not sc_counter.polys   # không dựng vạch/vùng
+
+
 def test_streaming_counter_zone_stats():
     sc, _ = make_scenario("object", "zone",
                           zone=[[0, 0], [100, 0], [100, 100], [0, 100]], resolution=(320, 180))

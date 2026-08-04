@@ -24,10 +24,15 @@ __all__ = ["UltralyticsYoloDetector"]
 class UltralyticsYoloDetector:
     """Detector YOLOv8 (ultralytics) cho đối tượng COCO: người, xe…
 
-    Mặc định dùng **yolov8m** (mạnh hơn yolov8n rất nhiều — nano hay BỎ SÓT người ở
-    xa/tối và xe nhỏ top-down) + **imgsz lớn** (bắt vật nhỏ tốt hơn) + **conf thấp**.
-    Chỉnh qua env: ``YOLO_WEIGHTS`` (vd yolov8l.pt/yolov8x.pt), ``YOLO_IMGSZ``,
-    ``YOLO_CONF``.
+    ĐỂ ĐẾM ÍT BỎ SÓT NGƯỜI/XE (recall cao), mặc định mạnh tay:
+      * **yolov8x** — bản LỚN NHẤT họ YOLOv8 (recall cao nhất; nano/m hay bỏ sót
+        người xa/nhỏ, xe khuất). Env ``YOLO_WEIGHTS`` đổi (yolov8m.pt cho nhanh,
+        hoặc yolo11x.pt/yolov9e.pt nếu muốn mới hơn).
+      * **conf=0.15** — ngưỡng THẤP để bắt cả vật mờ/khuất (bỏ sót giảm; nhiễu thừa
+        do tracker + min-track lọc bớt). Env ``YOLO_CONF``.
+      * **imgsz=1280** — ảnh lớn → vật NHỎ/ở xa rõ hơn → bắt được. Env ``YOLO_IMGSZ``.
+      * **max_det=1000** — cảnh ĐÔNG (đám đông, kẹt xe) không bị cắt ở 300. Env ``YOLO_MAX_DET``.
+      * **augment (TTA)** — bật ``YOLO_AUGMENT=1`` để tăng recall thêm (chậm hơn ~2-3×).
     """
 
     def __init__(
@@ -39,11 +44,15 @@ class UltralyticsYoloDetector:
         device: Optional[str] = None,
         imgsz: Optional[int] = None,
     ):
-        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8m.pt")
+        # yolov8x (lớn nhất) — RECALL cao nhất, giảm BỎ SÓT người/xe. Đổi bằng YOLO_WEIGHTS.
+        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8x.pt")
         self.confidence = (confidence if confidence is not None
-                           else float(os.environ.get("YOLO_CONF", "0.25")))
+                           else float(os.environ.get("YOLO_CONF", "0.15")))
         self.iou = iou
-        self.imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "960"))
+        self.imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "1280"))
+        # max_det: cảnh đông không bị chặn ở 300 (mặc định ultralytics). augment=TTA.
+        self.max_det = int(os.environ.get("YOLO_MAX_DET", "1000"))
+        self.augment = os.environ.get("YOLO_AUGMENT", "0") == "1"
         # Lớp cần giữ: ưu tiên tham số, rồi env YOLO_CLASSES (cho model tuỳ biến như
         # VisDrone có tên lớp khác COCO), None = suy ra từ prompt.
         if want:
@@ -91,8 +100,8 @@ class UltralyticsYoloDetector:
         if self.device:
             self._model.to(self.device)
         self._names = self._model.names       # dict {id: 'person', ...}
-        print(f"✅ YOLOv8 ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}) "
-              f"loaded in {time.time() - t0:.1f}s")
+        print(f"✅ YOLOv8 ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}, "
+              f"max_det={self.max_det}, TTA={self.augment}) loaded in {time.time() - t0:.1f}s")
         return self
 
     @staticmethod
@@ -149,7 +158,8 @@ class UltralyticsYoloDetector:
             mode = "tiled"
         else:
             result = self._model(frame, conf=self.confidence, iou=self.iou,
-                                 imgsz=self.imgsz, verbose=False)[0]
+                                 imgsz=self.imgsz, max_det=self.max_det,
+                                 augment=self.augment, verbose=False)[0]
             dets = self._boxes_to_detections(result.boxes, self._names, want)
             mode = "full"
         return DetectorResult(
@@ -171,7 +181,8 @@ class UltralyticsYoloDetector:
 
         if self._slicer is None:
             def _cb(img_slice):
-                r = self._model(img_slice, conf=self.confidence, iou=self.iou, verbose=False)[0]
+                r = self._model(img_slice, conf=self.confidence, iou=self.iou,
+                                max_det=self.max_det, augment=self.augment, verbose=False)[0]
                 return sv.Detections.from_ultralytics(r)
 
             wh = (self.tile_wh, self.tile_wh)
@@ -184,7 +195,8 @@ class UltralyticsYoloDetector:
                     callback=_cb, slice_wh=wh, overlap_ratio_wh=(0.2, 0.2))
 
         full = self._model(frame, conf=self.confidence, iou=self.iou,
-                           imgsz=self.imgsz, verbose=False)[0]
+                           imgsz=self.imgsz, max_det=self.max_det,
+                           augment=self.augment, verbose=False)[0]
         det = sv.Detections.merge([sv.Detections.from_ultralytics(full), self._slicer(frame)])
         if len(det):
             det = det.with_nms(threshold=self.iou)

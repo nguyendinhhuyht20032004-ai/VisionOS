@@ -62,10 +62,11 @@ class StreamingCounter:
             (sx, sy), (ex, ey) = scenario.build_line().endpoints(self.w, self.h)
             self.line = sv.LineZone(start=sv.Point(float(sx), float(sy)),
                                     end=sv.Point(float(ex), float(ey)))
-        else:
+        elif scenario.counting_type == "zone":
             for z in scenario.build_zones():
                 poly = np.array([[int(x), int(y)] for x, y in z.to_pixels(self.w, self.h)], dtype=int)
                 self.polys.append(_make_polygon_zone(sv, poly, self.w, self.h))
+        # fullscreen: không vạch, không vùng — đếm toàn khung.
 
         # Annotator supervision (box bo góc + nhãn + trace + bộ đếm). Lỗi API → vẽ cv2.
         self.annos = None
@@ -125,6 +126,11 @@ class StreamingCounter:
             cur = int(inside.sum())
             self.result.zone_current = cur
             self.result.zone_peak = max(self.result.zone_peak, cur)
+        if self.scenario.counting_type == "fullscreen":
+            # TOÀN MÀN HÌNH: đếm MỌI vật đang trong khung (hiện tại/đỉnh); tổng = tracks.
+            cur = int(len(det))
+            self.result.zone_current = cur
+            self.result.zone_peak = max(self.result.zone_peak, cur)
 
         self.result.frames += 1
         self.result.unique_tracks = len(self._seen)
@@ -159,6 +165,9 @@ class StreamingCounter:
         if self.scenario.counting_type == "line":
             d.update({"in": r.in_count, "out": r.out_count, "total": r.total_crossings,
                       "in_label": r.in_label, "out_label": r.out_label})
+        elif self.scenario.counting_type == "fullscreen":
+            # TOÀN MÀN HÌNH: in_frame = đang trong khung, peak = đông nhất, total = tổng vật khác nhau.
+            d.update({"in_frame": r.zone_current, "peak": r.zone_peak, "total": r.unique_tracks})
         else:
             d.update({"in_zone": r.zone_current, "zone_peak": r.zone_peak})
         return d

@@ -38,7 +38,7 @@ class CountScenario:
     mode: MonitoringMode
     model: str
     prompt: str                          # đối tượng (YOLO) hoặc mô tả (LocateAnything)
-    counting_type: str                   # "line" | "zone"
+    counting_type: str                   # "line" | "zone" | "fullscreen"
     resolution: Tuple[int, int] = (1280, 720)
     # Vạch đếm (khi counting_type == "line"), toạ độ phần trăm 0..100.
     line_start_pct: Tuple[float, float] = (0.0, 50.0)
@@ -60,8 +60,9 @@ class CountScenario:
             raise ValueError(f"key không hợp lệ: {self.key!r}")
         if not self.prompt.strip():
             raise ValueError(f"[{self.key}] prompt rỗng")
-        if self.counting_type not in ("line", "zone"):
+        if self.counting_type not in ("line", "zone", "fullscreen"):
             raise ValueError(f"[{self.key}] counting_type sai: {self.counting_type}")
+        # "fullscreen" = đếm MỌI vật trong TOÀN khung (không cần vạch/vùng).
         if self.counting_type == "zone":
             if self.zones_pct:
                 for i, pts in enumerate(self.zones_pct):

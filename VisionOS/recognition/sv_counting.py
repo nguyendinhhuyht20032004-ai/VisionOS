@@ -109,10 +109,11 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None, 
         (sx, sy), (ex, ey) = scenario.build_line().endpoints(w, h)
         line = sv.LineZone(start=sv.Point(float(sx), float(sy)),
                            end=sv.Point(float(ex), float(ey)))
-    else:
+    elif scenario.counting_type == "zone":
         for z in scenario.build_zones():
             poly = np.array([[int(x), int(y)] for x, y in z.to_pixels(w, h)], dtype=int)
             polys.append(_make_polygon_zone(sv, poly, w, h))
+    # fullscreen: không vạch/vùng — đếm toàn khung (xử lý trong vòng lặp).
 
     # Annotator supervision (box bo góc + nhãn + vệt + bộ đếm trên vạch/vùng) — dựng
     # 1 lần (TraceAnnotator tích luỹ vệt qua frame). Lỗi API → rơi về vẽ cv2.
@@ -163,6 +164,10 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None, 
             cur = int(inside.sum())
             res.zone_current = cur
             res.zone_peak = max(res.zone_peak, cur)
+        if scenario.counting_type == "fullscreen":                  # TOÀN màn hình: mọi vật trong khung
+            cur = int(len(det))
+            res.zone_current = cur
+            res.zone_peak = max(res.zone_peak, cur)
 
         res.frames += 1
         res.unique_tracks = len(seen)
@@ -202,6 +207,8 @@ def _annotate_sv(frame, det, annos, line, res, w, h, cv2, sv):
     # Banner tóm tắt trên cùng (ASCII).
     if line is not None:
         txt = f"{res.in_label}:{res.in_count}  {res.out_label}:{res.out_count}  frame:{res.frames}"
+    elif res.counting_type == "fullscreen":
+        txt = f"toan khung:{res.zone_current}  dinh:{res.zone_peak}  tong:{res.unique_tracks}  frame:{res.frames}"
     else:
         txt = f"trong vung:{res.zone_current}  dinh:{res.zone_peak}  frame:{res.frames}"
     f = np.ascontiguousarray(f)
@@ -234,6 +241,8 @@ def _draw(frame, det, scenario, line, zones_px, res, w, h, cv2, np):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, CYAN, 1)
     if line is not None:
         txt = f"{scenario.in_label}:{res.in_count}  {scenario.out_label}:{res.out_count}  frame:{res.frames}"
+    elif scenario.counting_type == "fullscreen":
+        txt = f"toan khung:{res.zone_current}  dinh:{res.zone_peak}  tong:{res.unique_tracks}  frame:{res.frames}"
     else:
         txt = f"trong vung:{res.zone_current}  dinh:{res.zone_peak}  frame:{res.frames}"
     cv2.rectangle(img, (0, 0), (w, 28), (0, 0, 0), -1)

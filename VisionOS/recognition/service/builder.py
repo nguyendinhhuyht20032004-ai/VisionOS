@@ -51,7 +51,7 @@ def make_scenario(prompt: str, counting_type: str = "line",
 
     model: 'yolo' | 'locate' | 'auto' (auto suy từ prompt).
     """
-    counting_type = counting_type if counting_type in ("line", "zone") else "line"
+    counting_type = counting_type if counting_type in ("line", "zone", "fullscreen") else "line"
     kind = model if model in ("yolo", "locate") else ("yolo" if wants_yolo(prompt) else "locate")
     model_name = "YOLO-NAS-S" if kind == "yolo" else "LocateAnything-3B"
     mode = MonitoringMode.STANDARD if kind == "yolo" else MonitoringMode.SMART
@@ -65,9 +65,10 @@ def make_scenario(prompt: str, counting_type: str = "line",
         ln = line or [0.0, 50.0, 100.0, 50.0]
         kw.update(line_start_pct=(float(ln[0]), float(ln[1])),
                   line_end_pct=(float(ln[2]), float(ln[3])))
-    else:
+    elif counting_type == "zone":
         zn = zone or [[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]]
         kw.update(zone_points_pct=tuple((float(x), float(y)) for x, y in zn))
+    # fullscreen: KHÔNG cần vạch/vùng — đếm toàn khung.
 
     sc = CountScenario(**kw)
     sc.validate()
