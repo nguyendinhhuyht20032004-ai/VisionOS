@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Optional
 
-__all__ = ["FrameSource", "parse_source"]
+__all__ = ["FrameSource", "parse_source", "grab_snapshot", "encode_jpeg"]
 
 
 def parse_source(source):
@@ -20,6 +20,41 @@ def parse_source(source):
         return source
     s = str(source).strip()
     return int(s) if s.isdigit() else s
+
+
+def grab_snapshot(source, timeout: float = 8.0, warmup: int = 3):
+    """Lấy 1 FRAME từ nguồn (để người dùng VẼ vạch/vùng lên đó). Trả ndarray BGR hoặc None.
+
+    Đọc vài frame đầu (warmup) cho camera ổn định rồi trả frame mới nhất. Dùng
+    ``FrameSource`` (chịu được RTSP/HTTP/file/webcam + tự reconnect trong ``timeout``).
+    """
+    import time as _t
+
+    fs = FrameSource(source, reconnect=True).start()
+    frame, got = None, 0
+    t0 = _t.time()
+    try:
+        while _t.time() - t0 < timeout:
+            fr = fs.read()
+            if fr is not None:
+                frame = fr
+                got += 1
+                if got >= warmup:
+                    break
+            elif fs.error and not fs.alive:
+                break
+            _t.sleep(0.05)
+    finally:
+        fs.stop()
+    return frame
+
+
+def encode_jpeg(frame_bgr, quality: int = 85):
+    """ndarray BGR → bytes JPEG."""
+    import cv2
+
+    ok, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    return buf.tobytes() if ok else None
 
 
 class FrameSource:

@@ -87,6 +87,9 @@ class StreamingCounter:
         self._seen: set = set()
         self._t0 = time.time()
         self._last_latency_ms = 0.0
+        # Frame + detections của lần process GẦN NHẤT (cho service crop vật đã đếm → vector DB).
+        self.last_frame = None
+        self.last_det = None
 
     # ------------------------------------------------------------------ #
     def process(self, frame_bgr):
@@ -135,6 +138,7 @@ class StreamingCounter:
         self.result.frames += 1
         self.result.unique_tracks = len(self._seen)
         self.result.elapsed_s = time.time() - self._t0
+        self.last_frame, self.last_det = frame_bgr, det   # cho service crop vật → vector DB
 
         out = None
         if self.annos is not None:

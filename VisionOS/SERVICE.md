@@ -1,9 +1,21 @@
 # 🎥 Service AI đếm theo CAMERA
 
-Đưa nguồn camera vào → **detect + track (ByteTrack) + làm mượt (DetectionsSmoother) +
+Đưa nguồn camera vào → **detect (YOLOv8) + track (ByteTrack) + làm mượt (DetectionsSmoother) +
 đếm (LineZone/PolygonZone)** → xuất **luồng video annotate + số đếm realtime** qua REST API
-và trang web. Dùng chung engine đã kiểm chứng: **YOLO** cho người/xe (nhanh), **LocateAnything-3B**
-cho sản phẩm open-vocab (thùng/cà chua…).
+và trang web. Đếm **người & phương tiện** (YOLO làm tốt). Xem thêm kế hoạch tổng thể:
+[`docs/AI_SERVICE_PLAN.md`](docs/AI_SERVICE_PLAN.md).
+
+## 🐳 Chạy bằng Docker (khuyên dùng)
+```bash
+docker compose up --build          # dựng api (FastAPI) + qdrant (vector DB)
+# Mở http://localhost:8000  ·  GPU: sửa TORCH_CUDA=cu121 trong docker-compose.yml + bật khối deploy.devices
+bash scripts/docker_smoke.sh       # kiểm thử nhanh: build→healthz→tạo job→đọc số đếm
+```
+
+## ✏️ Vẽ vạch/vùng rồi ĐẾM (trên trang web)
+Mở `http://localhost:8000` → nhập nguồn → **📷 Lấy frame** → chọn kiểu đếm → **VẼ** trực tiếp
+lên khung (vạch = 2 điểm, vùng = đa giác) → **▶ Bắt đầu đếm**. Toạ độ lưu theo **%** nên khớp
+mọi độ phân giải camera. Xem luồng annotate + số đếm realtime; mục "Sự kiện" tra vector DB.
 
 ## 🚀 TEST NHANH — KHÔNG cần camera thật (dùng file video như "camera")
 Chưa có camera? Coi 1 file `.mp4` là nguồn — chạy đúng engine của service rồi xuất
@@ -59,12 +71,15 @@ print("Mở:", ngrok.connect(8000).public_url)     # cần token ngrok miễn ph
 ## API
 | Method | Endpoint | Ý nghĩa |
 |---|---|---|
-| POST | `/api/jobs` | Tạo job đếm trên 1 camera → trả job (chạy nền) |
-| GET | `/api/jobs` | Liệt kê job |
-| GET | `/api/jobs/{id}` | Số đếm hiện tại (JSON) |
-| GET | `/api/jobs/{id}/frame.jpg` | Frame annotate mới nhất |
-| GET | `/api/jobs/{id}/mjpeg` | Luồng MJPEG annotate (dán vào `<img src>`) |
+| GET | `/healthz` | Health check (Docker/K8s) |
+| GET | `/api/snapshot?source=…` | **Lấy 1 frame** để VẼ vạch/vùng |
+| POST | `/api/jobs` | Tạo job đếm (kèm vạch/vùng người dùng vẽ) → chạy nền |
+| GET | `/api/jobs` · `/api/jobs/{id}` | Liệt kê / số đếm hiện tại (JSON) |
+| GET | `/api/jobs/{id}/frame.jpg` · `/mjpeg` | Frame annotate / luồng MJPEG |
 | POST | `/api/jobs/{id}/stop` | Dừng job |
+| GET | `/api/events?limit=` | Sự kiện gần nhất (vector DB) |
+| POST | `/api/search/similar` | Upload ảnh → tìm vật GIỐNG (ReID) |
+| GET | `/api/vectordb` | Trạng thái vector DB (qdrant / in-memory) |
 
 ### Tạo job (ví dụ)
 ```bash

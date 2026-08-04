@@ -13,10 +13,12 @@ fastapi). Chạy service: ``python run_service.py`` (hoặc ``python -m recognit
 """
 
 from .builder import get_detector, make_scenario, wants_yolo
-from .camera import FrameSource, parse_source
+from .camera import FrameSource, encode_jpeg, grab_snapshot, parse_source
 from .engine import StreamingCounter
+from .vectordb import VectorStore, embed_crop
 
 __all__ = [
-    "StreamingCounter", "FrameSource", "parse_source",
+    "StreamingCounter", "FrameSource", "parse_source", "grab_snapshot", "encode_jpeg",
     "make_scenario", "get_detector", "wants_yolo",
+    "VectorStore", "embed_crop",
 ]

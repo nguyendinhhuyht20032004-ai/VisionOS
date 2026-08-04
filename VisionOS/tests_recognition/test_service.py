@@ -149,3 +149,84 @@ def test_api_smoke():
     assert client.get("/").status_code == 200          # trang web
     assert client.get("/api/jobs").json() == []        # chưa có job
     assert client.get("/api/jobs/khong-co").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Vector DB (in-memory — KHÔNG cần qdrant)
+# --------------------------------------------------------------------------- #
+def test_embed_crop_dim_and_norm():
+    from recognition.service.vectordb import EMBED_DIM, embed_crop
+
+    red = np.zeros((32, 32, 3), dtype="uint8")
+    red[:] = (0, 0, 200)
+    v = embed_crop(red)
+    assert len(v) == EMBED_DIM
+    assert abs(sum(x * x for x in v) - 1.0) < 1e-3      # đã L2-normalize
+    assert embed_crop(np.zeros((0, 0, 3), dtype="uint8")) == [0.0] * EMBED_DIM  # crop rỗng
+
+
+def test_vectorstore_inmemory_add_search_recent():
+    from recognition.service.vectordb import VectorStore, embed_crop, make_event_payload
+
+    vs = VectorStore(url=None)                          # ép in-memory
+    assert vs.backend == "memory"
+    red = np.full((32, 32, 3), 0, "uint8"); red[:] = (0, 0, 200)
+    blue = np.full((32, 32, 3), 0, "uint8"); blue[:] = (200, 0, 0)
+    vs.add_event(embed_crop(red), make_event_payload(1, "car", "cam", "line"))
+    vs.add_event(embed_crop(blue), make_event_payload(2, "car", "cam", "line"))
+    assert vs.count() == 2
+    hits = vs.search(embed_crop(red), limit=2)          # tìm ĐỎ → track 1 đứng đầu
+    assert hits and hits[0]["payload"]["track_id"] == 1
+    assert hits[0]["score"] >= hits[-1]["score"]        # xếp theo độ giống giảm dần
+    assert len(vs.recent(5)) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Snapshot (lấy 1 frame để vẽ) — video synthetic, không cần camera thật
+# --------------------------------------------------------------------------- #
+def test_grab_snapshot_from_file(tmp_path):
+    import cv2
+
+    from recognition.service import encode_jpeg, grab_snapshot
+
+    p = str(tmp_path / "s.mp4")
+    vw = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"mp4v"), 10, (160, 120))
+    for _ in range(12):
+        vw.write(np.full((120, 160, 3), 60, dtype="uint8"))
+    vw.release()
+    fr = grab_snapshot(p, timeout=5)
+    assert fr is not None and fr.shape == (120, 160, 3)
+    jpg = encode_jpeg(fr)
+    assert jpg and jpg[:2] == b"\xff\xd8"               # magic JPEG
+
+
+def test_grab_snapshot_bad_source_returns_none():
+    from recognition.service import grab_snapshot
+
+    assert grab_snapshot("/khong/ton/tai_xyz.mp4", timeout=2) is None
+
+
+# --------------------------------------------------------------------------- #
+# API mới: healthz / snapshot / events (chỉ chạy nếu có fastapi)
+# --------------------------------------------------------------------------- #
+def test_api_health_snapshot_events(tmp_path):
+    pytest.importorskip("fastapi")
+    import cv2
+    from fastapi.testclient import TestClient
+
+    from recognition.service.app import app
+
+    client = TestClient(app)
+    h = client.get("/healthz").json()
+    assert h["status"] == "ok" and "vectordb" in h
+    assert client.get("/api/vectordb").json()["backend"] in ("memory", "qdrant")
+    assert "events" in client.get("/api/events").json()
+    # snapshot từ file synthetic
+    p = str(tmp_path / "v.mp4")
+    vw = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"mp4v"), 10, (160, 120))
+    for _ in range(12):
+        vw.write(np.full((120, 160, 3), 70, dtype="uint8"))
+    vw.release()
+    r = client.get("/api/snapshot", params={"source": p})
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert client.get("/api/snapshot", params={"source": "/khong/co.mp4"}).status_code == 502
