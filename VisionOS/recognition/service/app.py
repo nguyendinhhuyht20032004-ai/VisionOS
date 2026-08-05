@@ -186,12 +186,29 @@ def healthz():
     return {"status": "ok", "jobs": len(_JOBS), "vectordb": _VDB.backend}
 
 
+def _snapshot_hint(source: str) -> str:
+    """Gợi ý NGUYÊN NHÂN không lấy được frame (theo loại nguồn) — hay gặp khi chạy Docker."""
+    s = str(source).strip()
+    if s.isdigit():
+        return ("Webcam (số thiết bị) KHÔNG dùng được trong Docker — nhất là trên Mac/Windows. "
+                "Hãy chạy service bằng pip (không Docker) để dùng webcam, hoặc dùng RTSP/HTTP.")
+    if s.startswith(("rtsp://", "http://", "https://", "rtmp://")):
+        return "Kiểm tra URL đúng + camera/mạng tới được TỪ TRONG container (thử URL trên trình duyệt)."
+    import os
+
+    if not os.path.exists(s):
+        return ("File KHÔNG có trong container. Đặt video vào thư mục ./data (cạnh docker-compose.yml) "
+                "rồi nhập đường dẫn /data/<tên>.mp4 (đã mount sẵn). Hoặc dùng URL http(s) tới video.")
+    return "Đọc được đường dẫn nhưng không giải mã được video (thử file/URL khác)."
+
+
 @app.get("/api/snapshot")
 def api_snapshot(source: str, w: int = 960):
     """Lấy 1 FRAME từ nguồn (để vẽ vạch/vùng). Trả JPEG."""
     fr = grab_snapshot(source)
     if fr is None:
-        raise HTTPException(status_code=502, detail=f"Không lấy được frame từ nguồn: {source!r}")
+        raise HTTPException(status_code=502,
+                            detail=f"Không lấy được frame từ {source!r}. {_snapshot_hint(source)}")
     import cv2
 
     if w and fr.shape[1] > w:
@@ -359,10 +376,12 @@ function msg(t,warn){const m=document.getElementById('msg');m.textContent=t;m.cl
 function snap(){
  const s=document.getElementById('source').value; if(!s){msg('Nhập nguồn trước',1);return;}
  msg('Đang lấy frame…');
- img=new Image();
- img.onload=()=>{cv.width=img.naturalWidth;cv.height=img.naturalHeight;resetDraw();msg('Đã có frame — chọn kiểu đếm rồi VẼ.',1);};
- img.onerror=()=>msg('Không lấy được frame (kiểm tra nguồn).',1);
- img.src='/api/snapshot?w=960&source='+encodeURIComponent(s)+'&t='+Date.now();
+ fetch('/api/snapshot?w=960&source='+encodeURIComponent(s)+'&t='+Date.now())
+  .then(async r=>{ if(!r.ok){let d='';try{d=(await r.json()).detail;}catch(e){} throw new Error(d||('HTTP '+r.status));} return r.blob(); })
+  .then(b=>{ img=new Image();
+    img.onload=()=>{cv.width=img.naturalWidth;cv.height=img.naturalHeight;resetDraw();msg('Đã có frame — chọn kiểu đếm rồi VẼ.',1);};
+    img.src=URL.createObjectURL(b); })
+  .catch(e=>msg('Không lấy được frame — '+e.message,1));
 }
 function redraw(){
  if(!img.src)return; ctx.clearRect(0,0,cv.width,cv.height); ctx.drawImage(img,0,0,cv.width,cv.height);

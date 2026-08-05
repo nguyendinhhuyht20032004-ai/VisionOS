@@ -25,12 +25,17 @@ def parse_source(source):
 def grab_snapshot(source, timeout: float = 8.0, warmup: int = 3):
     """Lấy 1 FRAME từ nguồn (để người dùng VẼ vạch/vùng lên đó). Trả ndarray BGR hoặc None.
 
-    Đọc vài frame đầu (warmup) cho camera ổn định rồi trả frame mới nhất. Dùng
-    ``FrameSource`` (chịu được RTSP/HTTP/file/webcam + tự reconnect trong ``timeout``).
+    Đọc vài frame đầu (warmup) cho camera ổn định rồi trả frame mới nhất. File LOCAL
+    thiếu → trả None NGAY (khỏi chờ hết timeout); stream (rtsp/http) → cho reconnect.
     """
+    import os
     import time as _t
 
-    fs = FrameSource(source, reconnect=True).start()
+    s = parse_source(source)
+    is_file = isinstance(s, str) and not s.startswith(("rtsp://", "http://", "https://", "rtmp://"))
+    if is_file and not os.path.exists(s):
+        return None                          # file KHÔNG có (trong container) → fail nhanh
+    fs = FrameSource(source, reconnect=not is_file).start()  # file: không reconnect (fail nhanh)
     frame, got = None, 0
     t0 = _t.time()
     try:

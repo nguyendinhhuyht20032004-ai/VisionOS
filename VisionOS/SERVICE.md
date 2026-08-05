@@ -41,6 +41,13 @@ Tốc độ tham khảo trên CPU: yolov8n@640 ~ vài–chục fps · yolov8m@96
   pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu
   ```
   (GPU: đổi `cpu` → `cu121`.) Sau đó chạy lại service. Docker: build lại (`docker compose build --no-cache`).
+- **"Không lấy được frame" (nút Lấy frame)** — container KHÔNG truy cập được nguồn:
+  - **File trên máy** → copy video vào thư mục **`./data`** (cạnh `docker-compose.yml`, đã mount),
+    rồi nhập nguồn **`/data/<tên>.mp4`**. (Container không thấy ổ đĩa Mac/Windows.)
+  - **Webcam `0`** → KHÔNG dùng được trong Docker (nhất là Mac). Chạy bằng **pip** (không Docker)
+    để dùng webcam, hoặc dùng app IP-camera trên điện thoại (RTSP/HTTP).
+  - **RTSP/HTTP** → kiểm tra URL + mạng tới được từ container. Test nhanh bằng 1 URL video mp4 công khai.
+  - Thông báo lỗi trên web giờ đã ghi RÕ nguyên nhân theo từng loại nguồn.
 
 ## ⚡ Chạy REALTIME + hết nhầm car/truck
 Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng 1 xe lúc gán car lúc truck**.

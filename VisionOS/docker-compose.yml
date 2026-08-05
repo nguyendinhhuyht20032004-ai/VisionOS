@@ -19,6 +19,10 @@ services:
     depends_on:
       - qdrant
     restart: unless-stopped
+    volumes:
+      # Đặt video vào thư mục ./data (cạnh file này) → trong container là /data/<tên>.mp4.
+      # Nhập nguồn trên web = /data/ten.mp4 để "Lấy frame" đọc được (container KHÔNG thấy ổ máy Mac/Windows).
+      - ./data:/data
     # --- GPU: bỏ comment khối dưới + build với TORCH_CUDA=cu121 ---
     # deploy:
     #   resources:
