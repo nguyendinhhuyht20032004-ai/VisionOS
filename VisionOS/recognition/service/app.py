@@ -85,39 +85,11 @@ class Job:
         self._stats: dict = {}
         self._recorded: set = set()          # track-id đã lưu vào vector DB
         self._lock = threading.Lock()
-        # Tách luồng: hiển thị (nhẹ, mọi frame) ≠ YOLO (nặng, luồng nền). Chia sẻ qua 2 slot:
-        self._cur_frame = None               # frame MỚI NHẤT cho luồng detect (latest-wins)
-        self._cur_lock = threading.Lock()
-        self._latest_det = None              # det GẦN NHẤT từ luồng detect → luồng hiển thị vẽ
-        self._latest_det_time = 0.0          # thời điểm det đó được tính → tính "tuổi" để dự đoán box
-        self._det_lock = threading.Lock()
-        self._det_thread: Optional[threading.Thread] = None
 
     def start(self):
         self.running = True
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
-
-    def _detect_loop(self):
-        """LUỒNG NỀN: lấy frame MỚI NHẤT rồi chạy YOLO + đếm (nặng). Chạy nhanh hết mức CPU
-        cho phép; luồng hiển thị KHÔNG chờ nó → video vẫn mượt ở tốc độ gốc."""
-        while self.running:
-            with self._cur_lock:
-                fr = self._cur_frame
-                self._cur_frame = None
-            if fr is None:
-                time.sleep(0.003)
-                continue
-            try:
-                det = self.counter.detect(fr)          # nặng: YOLO + track + đếm
-            except Exception as e:  # noqa: BLE001
-                self.error = f"{type(e).__name__}: {e}"
-                break
-            with self._det_lock:
-                self._latest_det = det
-                self._latest_det_time = time.time()
-            if self.req.record_events:
-                self._record_events()
 
     def _run(self):
         import cv2
@@ -132,9 +104,6 @@ class Job:
             self.status = "đang kết nối camera"
             self.fs = FrameSource(self.source).start()
             self.status = "đang chạy"
-            # LUỒNG DETECT nền (nặng) — luồng này (hiển thị) chỉ vẽ (nhẹ) mỗi frame ở tốc độ gốc.
-            self._det_thread = threading.Thread(target=self._detect_loop, daemon=True)
-            self._det_thread.start()
             interval = 1.0 / self.req.max_fps if self.req.max_fps > 0 else 0.0
             last = 0.0
             while self.running:
@@ -143,25 +112,18 @@ class Job:
                     if self.fs.error and not self.fs.alive:
                         self.error = self.fs.error
                         break
-                    time.sleep(0.005)
+                    time.sleep(0.02)
                     continue
-                # Giao frame mới nhất cho luồng detect (latest-wins: nó bỏ frame cũ, bám realtime).
-                with self._cur_lock:
-                    self._cur_frame = fr
-                # LIVE (camera/RTSP): throttle hiển thị theo max_fps. FILE: reader đã phát đúng
-                # FPS gốc nên KHÔNG throttle (mỗi frame vẽ 1 lần ở tốc độ gốc → mượt như bản gốc).
-                if self.fs.drop_frames:
-                    now = time.time()
-                    if interval and now - last < interval:
-                        time.sleep(min(0.02, interval - (now - last)))
-                        continue
-                    last = now
-                # VẼ (nhẹ): dùng det gần nhất từ luồng nền → hiển thị mượt, không chờ YOLO.
-                # age = tuổi của det → engine dịch box theo vận tốc (xe nhanh box không chạy sau).
-                with self._det_lock:
-                    det = self._latest_det
-                    age = (time.time() - self._latest_det_time) if self._latest_det_time else 0.0
-                out = self.counter.render(fr, det, age)
+                # ĐỒNG BỘ: detect + vẽ NGAY trên frame này → box LUÔN ÔM SÁT vật (không trễ).
+                # Throttle theo max_fps để đỡ tải; reader đã phát đúng FPS gốc (file) nên không tua nhanh.
+                now = time.time()
+                if interval and now - last < interval:
+                    time.sleep(min(0.02, interval - (now - last)))
+                    continue
+                last = now
+                out = self.counter.process(fr)
+                if self.req.record_events:
+                    self._record_events()
                 ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 if ok:
                     with self._lock:
@@ -174,8 +136,6 @@ class Job:
             self.status = "lỗi" if self.error else "đã dừng"
             if self.fs is not None:
                 self.fs.stop()
-            if self._det_thread is not None:
-                self._det_thread.join(timeout=2.0)
 
     def _record_events(self):
         """Lưu NGOẠI HÌNH mỗi track MỚI (1 lần/track) vào vector DB → tìm kiếm/ReID."""

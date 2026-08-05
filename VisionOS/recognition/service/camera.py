@@ -7,7 +7,6 @@ Hỗ trợ: RTSP (``rtsp://``), HTTP(S) stream / file (``http…``, đường d�
 
 from __future__ import annotations
 
-import queue
 import threading
 import time
 from typing import Optional
@@ -59,17 +58,10 @@ def encode_jpeg(frame_bgr, quality: int = 85):
 
 
 class FrameSource:
-    def __init__(self, source, reconnect: bool = True, reconnect_delay: float = 1.0,
-                 drop_frames: Optional[bool] = None, queue_size: int = 8):
+    def __init__(self, source, reconnect: bool = True, reconnect_delay: float = 1.0):
         self.source = parse_source(source)
         self.reconnect = reconnect
         self.reconnect_delay = reconnect_delay
-        # drop_frames: True = chỉ giữ frame MỚI NHẤT (camera trực tiếp → realtime, bỏ frame cũ);
-        #   False = KHÔNG bỏ frame, trả ĐÚNG THỨ TỰ (file → phát mượt, đếm chính xác);
-        #   None = tự chọn khi mở (file có frame_count>0 → False; stream/rtsp/webcam → True).
-        self.drop_frames = drop_frames
-        self._queue_size = max(1, int(queue_size))
-        self._q: Optional[queue.Queue] = None
         self._cap = None
         self._frame = None
         self._lock = threading.Lock()
@@ -96,26 +88,17 @@ class FrameSource:
             pass
         if not cap.isOpened():
             return None
-        # Phân biệt FILE vs STREAM qua TỔNG số frame: file có frame_count>0 (đọc hết được);
-        # stream trực tiếp (rtsp/webcam/mjpeg) trả <=0.
-        is_file = False
+        # FILE (đọc được TỔNG số frame) → phát ĐÚNG TỐC ĐỘ gốc theo FPS: nếu không, cv2 đọc
+        # nhanh hết cỡ nên video bị TUA NHANH. Stream trực tiếp (rtsp/webcam/mjpeg) có
+        # frame_count<=0 → để nhịp = 0 (chạy tự do, nguồn đã tự giới hạn tốc độ) — giữ hành vi cũ.
         self._frame_interval = 0.0
         try:
             n = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             fps = cap.get(cv2.CAP_PROP_FPS)
-            if n and n > 0:
-                is_file = True
-                if fps and 1.0 <= fps <= 120.0:
-                    # FILE → phát ĐÚNG FPS gốc (nếu không cv2 đọc nhanh hết cỡ → video TUA NHANH).
-                    self._frame_interval = 1.0 / float(fps)
+            if n and n > 0 and fps and 1.0 <= fps <= 120.0:
+                self._frame_interval = 1.0 / float(fps)
         except Exception:  # noqa: BLE001
             pass
-        # Chốt chế độ giữ/bỏ frame (chỉ lần mở ĐẦU): file → KHÔNG bỏ frame (phát mượt, đúng
-        # thứ tự → tracker/đếm chính xác); stream → giữ frame mới nhất (realtime, bỏ frame cũ).
-        if self.drop_frames is None:
-            self.drop_frames = not is_file
-        if not self.drop_frames and self._q is None:
-            self._q = queue.Queue(maxsize=self._queue_size)
         return cap
 
     def _loop(self):
@@ -144,18 +127,8 @@ class FrameSource:
                 continue
             self.ok = True
             self.frames_read += 1
-            if self.drop_frames:
-                with self._lock:                  # camera trực tiếp: chỉ giữ frame mới nhất
-                    self._frame = fr
-            else:
-                # FILE: đẩy vào hàng đợi theo THỨ TỰ, KHÔNG bỏ frame. Đầy → CHỜ consumer
-                # (backpressure) → tự khớp tốc độ, phát mượt, không nhảy frame.
-                while self._run:
-                    try:
-                        self._q.put(fr, timeout=0.2)
-                        break
-                    except queue.Full:
-                        continue
+            with self._lock:
+                self._frame = fr
             # FILE → ngủ cho đủ 1 nhịp frame = phát ĐÚNG tốc độ gốc. Stream trực tiếp:
             # _frame_interval=0 → không ngủ. Lịch CỘNG DỒN (next_t += interval) tránh trôi giờ.
             if self._frame_interval:
@@ -169,16 +142,7 @@ class FrameSource:
             self._cap.release()
 
     def read(self):
-        """Trả 1 frame để xử lý (copy) hoặc None nếu chưa có.
-
-        - Camera trực tiếp (drop_frames=True): frame MỚI NHẤT (bỏ frame cũ → realtime).
-        - FILE (drop_frames=False): frame KẾ TIẾP theo ĐÚNG thứ tự trong hàng đợi (phát mượt).
-        """
-        if self._q is not None:
-            try:
-                return self._q.get(timeout=0.1)
-            except queue.Empty:
-                return None
+        """Trả frame MỚI NHẤT (copy) hoặc None nếu chưa có."""
         with self._lock:
             return None if self._frame is None else self._frame.copy()
 

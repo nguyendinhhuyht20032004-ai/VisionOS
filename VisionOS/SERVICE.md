@@ -68,22 +68,19 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 > Cần chính xác cao hơn (phân biệt loại xe tốt hơn): dùng `yolov8m/x` + `imgsz 960/1280` — nhưng
 > nên có **GPU** để vẫn realtime.
 
-### ▶️ Video chậm / giật, không mượt như bản gốc?
-YOLO trên CPU chậm hơn tốc độ video. Nếu MỖI frame phải đợi YOLO xong mới hiện thì tất nhiên
-**vừa chậm vừa giật**. Đã sửa bằng cách **TÁCH 2 LUỒNG** (như các app CV realtime):
+### ▶️ Box phải ÔM SÁT vật (không trễ) — tốc độ phát
+Service chạy **ĐỒNG BỘ**: mỗi frame hiện ra là **detect đúng frame đó rồi vẽ ngay** → **box luôn
+ôm sát vật** (không trễ, không lệch). Đây là ưu tiên **độ chính xác của box**.
 
-- **Luồng HIỂN THỊ** (nhẹ): phát **mọi frame ở đúng FPS gốc**, chỉ *vẽ lại* box gần nhất →
-  video **mượt, đúng tốc độ như bản gốc** (không đợi YOLO).
-- **Luồng YOLO** (nặng, chạy NỀN): lấy frame mới nhất, phát hiện + đếm nhanh hết mức CPU cho
-  phép, cập nhật box cho luồng hiển thị dùng. Box có thể trễ vài frame — gần như không thấy.
+- File đọc **đúng FPS gốc** (đã pace, không tua nhanh); lấy **frame mới nhất** nên **không bị chậm
+  lại** — CPU không kịp thì tự **bỏ bớt frame** để bám thời gian thực (số fps hiển thị = tốc độ
+  YOLO trên máy, ví dụ ~8–12 fps với `yolov8n@640`).
+- Muốn **nhiều fps hơn** (mượt hơn): tăng `max_fps`, hoặc dùng model nhẹ hơn / ảnh nhỏ hơn.
+  Muốn vừa **mượt cao vừa ôm sát**: cần **GPU** (YOLO nhanh → chạy kịp gần từng frame).
 
-Nhờ vậy, dù CPU chỉ chạy YOLO ~8–12 fps, **video vẫn phát mượt ở 25–30 fps** (đếm trên các frame
-YOLO kịp xử lý — ByteTrack bù khoảng trống nên số đếm vẫn ổn). File đọc **đúng FPS gốc** (không
-tua nhanh); camera/RTSP giữ frame mới nhất + `max_fps` như cũ.
-
-> Muốn box bám sát hơn / đếm dày hơn: dùng CPU mạnh hơn hoặc **GPU** (YOLO nhanh → luồng nền
-> theo kịp gần từng frame). `detect_every` vẫn có (áp cho nhánh đồng bộ), mặc định 1. Rebuild
-> để nhận bản vá.
+> Ghi chú: bản trước từng cho YOLO chạy luồng nền + *dự đoán* vị trí box để video mượt hơn, nhưng
+> box hay **lệch/không ôm sát** khi vật nhanh. Đã bỏ cách đó, quay lại đồng bộ cho **box chuẩn**.
+> Rebuild để nhận bản vá.
 
 ## 🚗 Phân loại xe (car/truck/bus) & vạch sót làn ngoài
 - **Phân loại LOẠI XE:** service dùng **YOLO COCO**, phân biệt **car / truck / bus** (+ motorcycle),
