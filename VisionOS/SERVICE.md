@@ -56,6 +56,17 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 > Cần chính xác cao hơn (phân biệt loại xe tốt hơn): dùng `yolov8m/x` + `imgsz 960/1280` — nhưng
 > nên có **GPU** để vẫn realtime.
 
+## 🚑 Xe cấp cứu/xe cao bị gọi là truck/bus? & vạch sót làn ngoài
+- **Sai loại xe (ambulance/van → truck/bus):** YOLO/COCO **không có** lớp ambulance/van, nên xe
+  cao bị map sang truck/bus gần nhất — đây là giới hạn của model, không sửa bằng chỉnh tham số.
+  Cách xử lý: đếm **gộp phương tiện** — đặt `prompt="vehicle"` (mặc định service **gộp mọi loại
+  xe thành 1 nhãn "vehicle"**, một màu → hết cảnh "sai loại"). Muốn phân biệt loại xe THẬT
+  (kể cả ambulance) → cần **model huấn luyện riêng** (nạp qua `YOLO_WEIGHTS=hf://…` + `YOLO_CLASSES`).
+  Muốn giữ nhãn car/truck/bus: gửi `"group_label": false` trong POST /api/jobs.
+- **Vạch chỉ đếm làn trong, sót làn ngoài:** (1) **vẽ vạch phủ HẾT các làn** (kéo dài qua cả làn
+  ngoài); (2) đã sửa `LineZone` đếm theo **1 điểm neo (tâm)** thay vì cả 4 góc → xe TO ở làn ngoài
+  (gần camera) cũng đếm được. Rebuild lại để nhận bản vá.
+
 ## ✏️ Vẽ vạch/vùng rồi ĐẾM (trên trang web)
 Mở `http://localhost:8000` → nhập nguồn → **📷 Lấy frame** → chọn kiểu đếm → **VẼ** trực tiếp
 lên khung (vạch = 2 điểm, vùng = đa giác) → **▶ Bắt đầu đếm**. Toạ độ lưu theo **%** nên khớp

@@ -138,6 +138,32 @@ def test_class_stabilized_by_track_majority():
     assert c.stats()["tracks"] == 1                          # vẫn 1 xe
 
 
+class _MultiClassDet:
+    """Trả 2 vật khác lớp (car + truck) — mô phỏng xe cao bị gán truck/bus."""
+
+    def detect(self, frame, prompt):
+        h, w = frame.shape[:2]
+        d = [Detection(BoundingBox(w * 0.3, 80.0, w * 0.3 + 60, 140.0), "car", 0.9),
+             Detection(BoundingBox(w * 0.6, 80.0, w * 0.6 + 90, 150.0), "truck", 0.9)]
+        return DetectorResult(d, raw="", latency_ms=0.0, model_name="fake")
+
+
+def test_merge_label_groups_all_vehicle_types():
+    # đếm gộp phương tiện: car/truck (xe cao bị nhầm) → 1 nhãn "vehicle" (COCO không có ambulance)
+    sc, _ = make_scenario("vehicle", "fullscreen", resolution=(320, 180))
+    c = StreamingCounter(sc, _MultiClassDet(), resolution=(320, 180), merge_label="vehicle")
+    for _ in range(4):
+        c.process(np.zeros((180, 320, 3), dtype="uint8"))
+    assert set(map(str, c.last_det.data["class_name"])) == {"vehicle"}
+
+
+def test_line_uses_single_triggering_anchor():
+    # vạch đếm theo 1 điểm neo (tâm) → xe TO làn ngoài cũng đếm được, không sót làn
+    sc, _ = make_scenario("vehicle", "line", line=[0, 50, 100, 50], resolution=(320, 180))
+    c = StreamingCounter(sc, _FakeDet(6), resolution=(320, 180))
+    assert c.line is not None                            # LineZone dựng OK (kể cả bản sv cũ)
+
+
 def test_detect_every_skips_detection():
     # detect_every=3: 9 frame chỉ gọi YOLO ở frame 1,3,6,9 (frame đầu luôn detect) = 4 lần
     det = _FlipDet(["car"])

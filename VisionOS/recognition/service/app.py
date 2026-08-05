@@ -55,6 +55,7 @@ class JobRequest(BaseModel):
     max_fps: float = 8.0
     confidence: float = 0.25
     detect_every: int = 1                         # chạy YOLO mỗi N frame (>1 = nhanh hơn trên CPU)
+    group_label: bool = True                      # gộp mọi loại xe → 1 nhãn "vehicle" (COCO nhầm xe cao)
     in_label: str = "IN"
     out_label: str = "OUT"
     anchor: Optional[str] = None
@@ -68,6 +69,10 @@ class Job:
         self.scenario, self.kind = make_scenario(
             req.prompt, req.counting_type, req.line, req.zone,
             tuple(req.resolution), req.in_label, req.out_label, req.anchor, req.model)
+        # Prompt là NHÓM nhiều lớp (vd "vehicle"→car/moto/truck/bus) + group_label → gộp nhãn.
+        from ..detectors.yolo_nas import COCO_ALIASES
+        p = req.prompt.lower().strip()
+        self.merge_label = req.prompt if (req.group_label and len(COCO_ALIASES.get(p, [])) > 1) else None
         self.source = req.source
         self.fs: Optional[FrameSource] = None
         self.counter: Optional[StreamingCounter] = None
@@ -93,7 +98,8 @@ class Job:
             detector = get_detector(self.kind, self.req.confidence)
             self.counter = StreamingCounter(self.scenario, detector,
                                             resolution=self.scenario.resolution,
-                                            detect_every=self.req.detect_every)
+                                            detect_every=self.req.detect_every,
+                                            merge_label=self.merge_label)
             self.status = "đang kết nối camera"
             self.fs = FrameSource(self.source).start()
             self.status = "đang chạy"
@@ -329,7 +335,8 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
   <button onclick="startJob()">▶ Bắt đầu đếm</button>
   <button class="stop" onclick="stopJob()">■ Dừng</button>
   <button class="warn" onclick="resetDraw()">↺ Vẽ lại</button>
-  <p><small id="msg" class="hint">Nhập nguồn → “Lấy frame” → chọn kiểu đếm → VẼ lên khung → “Bắt đầu đếm”.</small></p>
+  <p><small id="msg" class="hint">Nhập nguồn → “Lấy frame” → chọn kiểu đếm → VẼ lên khung → “Bắt đầu đếm”.<br>
+   ⚠️ Vạch phải kéo PHỦ HẾT các làn (cả làn ngoài) thì mới đếm đủ.</small></p>
   <hr style="border-color:#334155">
   <label>🔎 Sự kiện gần nhất (vector DB)</label>
   <button class="alt" onclick="loadEvents()">Tải sự kiện</button>

@@ -21,7 +21,8 @@ class StreamingCounter:
     """Đếm theo luồng cho MỘT scenario + MỘT detector. Gọi :meth:`process` mỗi frame."""
 
     def __init__(self, scenario, detector, resolution: Optional[Tuple[int, int]] = None,
-                 track_thresh: float = 0.1, smoother_len: int = 8, detect_every: int = 1):
+                 track_thresh: float = 0.1, smoother_len: int = 8, detect_every: int = 1,
+                 merge_label: Optional[str] = None):
         import warnings
 
         import numpy as np
@@ -60,8 +61,14 @@ class StreamingCounter:
             if scenario.counting_type == "zone" else [])
         if scenario.counting_type == "line":
             (sx, sy), (ex, ey) = scenario.build_line().endpoints(self.w, self.h)
-            self.line = sv.LineZone(start=sv.Point(float(sx), float(sy)),
-                                    end=sv.Point(float(ex), float(ey)))
+            start, end = sv.Point(float(sx), float(sy)), sv.Point(float(ex), float(ey))
+            # Đếm theo 1 ĐIỂM NEO (tâm) thay vì cả 4 góc → xe TO (làn ngoài, gần camera)
+            # cũng đếm được, không sót làn nào. Fallback nếu bản supervision cũ không có tham số.
+            anchor = getattr(sv.Position, scenario.zone_anchor, sv.Position.CENTER)
+            try:
+                self.line = sv.LineZone(start=start, end=end, triggering_anchors=(anchor,))
+            except TypeError:
+                self.line = sv.LineZone(start=start, end=end)
         elif scenario.counting_type == "zone":
             for z in scenario.build_zones():
                 poly = np.array([[int(x), int(y)] for x, y in z.to_pixels(self.w, self.h)], dtype=int)
@@ -94,6 +101,9 @@ class StreamingCounter:
         self.detect_every = max(1, int(detect_every))
         self._frame_i = 0
         self._track_cls: dict = {}          # track_id → {lớp: số lần} (bình chọn lớp ổn định)
+        # merge_label: gộp MỌI vật về 1 nhãn (vd "vehicle") — dùng khi đếm gộp phương tiện
+        # (COCO không có lớp ambulance/van → xe cao bị gọi nhầm truck/bus; gộp lại cho gọn).
+        self.merge_label = merge_label
 
     # ------------------------------------------------------------------ #
     def process(self, frame_bgr):
@@ -178,6 +188,13 @@ class StreamingCounter:
         if det.tracker_id is None or not getattr(det, "data", None) or "class_name" not in det.data:
             return
         from ..sv_counting import _class_id
+
+        # GỘP nhãn: mọi vật về 1 lớp (vd "vehicle") — 1 màu, không còn "sai loại".
+        if self.merge_label:
+            n = len(det.data["class_name"])
+            det.data["class_name"] = np.array([self.merge_label] * n)
+            det.class_id = np.array([_class_id(self.merge_label)] * n, dtype=int)
+            return
 
         names = list(det.data["class_name"])
         ids = list(det.class_id) if det.class_id is not None else [0] * len(names)

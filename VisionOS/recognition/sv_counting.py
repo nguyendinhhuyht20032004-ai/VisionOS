@@ -125,8 +125,13 @@ def sv_run(frames, scenario, detector, resolution, max_frames=300, writer=None, 
                 for z in scenario.build_zones()]
     if scenario.counting_type == "line":
         (sx, sy), (ex, ey) = scenario.build_line().endpoints(w, h)
-        line = sv.LineZone(start=sv.Point(float(sx), float(sy)),
-                           end=sv.Point(float(ex), float(ey)))
+        start, end = sv.Point(float(sx), float(sy)), sv.Point(float(ex), float(ey))
+        # Đếm theo 1 ĐIỂM NEO (tâm) → xe TO (làn ngoài) cũng đếm được, không sót làn.
+        anchor = getattr(sv.Position, scenario.zone_anchor, sv.Position.CENTER)
+        try:
+            line = sv.LineZone(start=start, end=end, triggering_anchors=(anchor,))
+        except TypeError:
+            line = sv.LineZone(start=start, end=end)
     elif scenario.counting_type == "zone":
         for z in scenario.build_zones():
             poly = np.array([[int(x), int(y)] for x, y in z.to_pixels(w, h)], dtype=int)
