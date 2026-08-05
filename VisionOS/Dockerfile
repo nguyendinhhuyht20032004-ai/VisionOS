@@ -31,8 +31,8 @@ RUN pip install --upgrade pip && \
     pip install -r requirements-service.txt
 
 # Nạp sẵn trọng số YOLO vào image (khỏi tải lại mỗi lần chạy container).
-# Mặc định yolov8m (CPU chạy được). GPU: --build-arg YOLO_WEIGHTS=yolov8x.pt.
-ARG YOLO_WEIGHTS=yolov8m.pt
+# Mặc định yolov8n (realtime trên CPU). GPU: --build-arg YOLO_WEIGHTS=yolov8x.pt.
+ARG YOLO_WEIGHTS=yolov8n.pt
 RUN python -c "from ultralytics import YOLO; YOLO('${YOLO_WEIGHTS}')" || true
 
 COPY . .

@@ -54,6 +54,7 @@ class JobRequest(BaseModel):
     resolution: List[int] = [960, 540]
     max_fps: float = 8.0
     confidence: float = 0.25
+    detect_every: int = 1                         # chạy YOLO mỗi N frame (>1 = nhanh hơn trên CPU)
     in_label: str = "IN"
     out_label: str = "OUT"
     anchor: Optional[str] = None
@@ -91,7 +92,8 @@ class Job:
             self.status = "đang nạp model (" + self.kind + ")"
             detector = get_detector(self.kind, self.req.confidence)
             self.counter = StreamingCounter(self.scenario, detector,
-                                            resolution=self.scenario.resolution)
+                                            resolution=self.scenario.resolution,
+                                            detect_every=self.req.detect_every)
             self.status = "đang kết nối camera"
             self.fs = FrameSource(self.source).start()
             self.status = "đang chạy"
@@ -323,6 +325,7 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
     <option value="fullscreen">Toàn màn hình (không cần vẽ)</option>
   </select>
   <label>max_fps</label><input id="fps" value="8">
+  <label>Detect mỗi N frame (CPU chậm → để 2–3 cho mượt hơn)</label><input id="dev" value="1">
   <button onclick="startJob()">▶ Bắt đầu đếm</button>
   <button class="stop" onclick="stopJob()">■ Dừng</button>
   <button class="warn" onclick="resetDraw()">↺ Vẽ lại</button>
@@ -370,7 +373,8 @@ function resetDraw(){ctype=document.getElementById('ctype').value;pts=[];documen
 function startJob(){
  const s=document.getElementById('source').value; if(!s){msg('Nhập nguồn',1);return;}
  let body={source:s,prompt:document.getElementById('prompt').value,counting_type:ctype,
-   model:'yolo',max_fps:parseFloat(document.getElementById('fps').value)||8};
+   model:'yolo',max_fps:parseFloat(document.getElementById('fps').value)||8,
+   detect_every:parseInt(document.getElementById('dev').value)||1};
  if(ctype==='line'){ if(pts.length!==2){msg('Hãy VẼ 2 điểm cho vạch.',1);return;} body.line=[pts[0][0],pts[0][1],pts[1][0],pts[1][1]]; }
  else if(ctype==='zone'){ if(pts.length<3){msg('Vẽ ≥3 điểm cho vùng.',1);return;} body.zone=pts; }
  msg('Đang tạo job…');

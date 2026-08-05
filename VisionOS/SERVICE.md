@@ -42,6 +42,20 @@ Tốc độ tham khảo trên CPU: yolov8n@640 ~ vài–chục fps · yolov8m@96
   ```
   (GPU: đổi `cpu` → `cu121`.) Sau đó chạy lại service. Docker: build lại (`docker compose build --no-cache`).
 
+## ⚡ Chạy REALTIME + hết nhầm car/truck
+Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng 1 xe lúc gán car lúc truck**.
+Đã xử lý + cách tăng tốc:
+- **Ổn định LỚP theo track** (tự động): nhãn của mỗi xe = lớp **xuất hiện nhiều nhất** của track
+  đó (bình chọn đa số) → hết nhấp nháy car↔truck, màu ổn định. *(Số đếm tổng không đổi.)*
+- **Model nhẹ + ảnh nhỏ** (mặc định service): `YOLO_WEIGHTS=yolov8n.pt`, `YOLO_IMGSZ=640`,
+  `YOLO_CONF=0.3` (ngưỡng cao → ít box mờ gây nhầm). Đây là bộ realtime cho CPU.
+- **`detect_every`** (ô "Detect mỗi N frame" trên web, hoặc field trong POST /api/jobs): chạy YOLO
+  **mỗi N frame** (frame giữa vẽ lại box gần nhất) → nhanh gấp ~N lần. CPU chậm để **2–3**.
+- Tăng `max_fps` (8–15) để hiển thị mượt; kết hợp `detect_every` để giảm tải YOLO.
+
+> Cần chính xác cao hơn (phân biệt loại xe tốt hơn): dùng `yolov8m/x` + `imgsz 960/1280` — nhưng
+> nên có **GPU** để vẫn realtime.
+
 ## ✏️ Vẽ vạch/vùng rồi ĐẾM (trên trang web)
 Mở `http://localhost:8000` → nhập nguồn → **📷 Lấy frame** → chọn kiểu đếm → **VẼ** trực tiếp
 lên khung (vạch = 2 điểm, vùng = đa giác) → **▶ Bắt đầu đếm**. Toạ độ lưu theo **%** nên khớp

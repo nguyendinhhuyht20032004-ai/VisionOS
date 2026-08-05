@@ -21,7 +21,7 @@ class StreamingCounter:
     """Đếm theo luồng cho MỘT scenario + MỘT detector. Gọi :meth:`process` mỗi frame."""
 
     def __init__(self, scenario, detector, resolution: Optional[Tuple[int, int]] = None,
-                 track_thresh: float = 0.1, smoother_len: int = 8):
+                 track_thresh: float = 0.1, smoother_len: int = 8, detect_every: int = 1):
         import warnings
 
         import numpy as np
@@ -90,6 +90,10 @@ class StreamingCounter:
         # Frame + detections của lần process GẦN NHẤT (cho service crop vật đã đếm → vector DB).
         self.last_frame = None
         self.last_det = None
+        # detect_every: chỉ chạy YOLO mỗi N frame (tăng throughput CPU); frame giữa vẽ lại box cũ.
+        self.detect_every = max(1, int(detect_every))
+        self._frame_i = 0
+        self._track_cls: dict = {}          # track_id → {lớp: số lần} (bình chọn lớp ổn định)
 
     # ------------------------------------------------------------------ #
     def process(self, frame_bgr):
@@ -100,45 +104,55 @@ class StreamingCounter:
         if frame_bgr.shape[1::-1] != (self.w, self.h):
             frame_bgr = cv2.resize(frame_bgr, (self.w, self.h))
 
-        t0 = time.time()
-        dr = self.detector.detect(frame_bgr, self.scenario.prompt)
-        self._last_latency_ms = (time.time() - t0) * 1000
-        self.result.total_detections += len(dr.detections)
+        self._frame_i += 1
+        # detect_every>1: chỉ chạy YOLO mỗi N frame (nặng nhất) → throughput cao hơn trên CPU.
+        # Frame bỏ qua: vẽ lại box GẦN NHẤT (không đếm lại) → video vẫn mượt.
+        do_detect = (self._frame_i % self.detect_every == 0) or self.last_det is None
 
-        det = _to_sv(dr.detections, sv, np)
-        det = self.tracker.update_with_detections(det)
-        if self.smoother is not None:
-            try:
-                det = self.smoother.update_with_detections(det)
-            except Exception:  # noqa: BLE001
-                pass
+        if do_detect:
+            t0 = time.time()
+            dr = self.detector.detect(frame_bgr, self.scenario.prompt)
+            self._last_latency_ms = (time.time() - t0) * 1000
+            self.result.total_detections += len(dr.detections)
 
-        if det.tracker_id is not None:
-            for tid in det.tracker_id:
-                if tid is not None:
-                    self._seen.add(int(tid))
+            det = _to_sv(dr.detections, sv, np)
+            det = self.tracker.update_with_detections(det)
+            if self.smoother is not None:
+                try:
+                    det = self.smoother.update_with_detections(det)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._stabilize_class(det)   # nhãn/màu ổn định theo track (chống car↔truck nhấp nháy)
 
-        if self.line is not None:
-            self.line.trigger(det)
-            self.result.in_count = int(self.line.in_count)
-            self.result.out_count = int(self.line.out_count)
-        if self.polys:
-            inside = np.zeros(len(det), dtype=bool)
-            for pz in self.polys:
-                inside = inside | np.asarray(pz.trigger(det), dtype=bool)
-            cur = int(inside.sum())
-            self.result.zone_current = cur
-            self.result.zone_peak = max(self.result.zone_peak, cur)
-        if self.scenario.counting_type == "fullscreen":
-            # TOÀN MÀN HÌNH: đếm MỌI vật đang trong khung (hiện tại/đỉnh); tổng = tracks.
-            cur = int(len(det))
-            self.result.zone_current = cur
-            self.result.zone_peak = max(self.result.zone_peak, cur)
+            if det.tracker_id is not None:
+                for tid in det.tracker_id:
+                    if tid is not None:
+                        self._seen.add(int(tid))
+
+            if self.line is not None:
+                self.line.trigger(det)
+                self.result.in_count = int(self.line.in_count)
+                self.result.out_count = int(self.line.out_count)
+            if self.polys:
+                inside = np.zeros(len(det), dtype=bool)
+                for pz in self.polys:
+                    inside = inside | np.asarray(pz.trigger(det), dtype=bool)
+                cur = int(inside.sum())
+                self.result.zone_current = cur
+                self.result.zone_peak = max(self.result.zone_peak, cur)
+            if self.scenario.counting_type == "fullscreen":
+                # TOÀN MÀN HÌNH: đếm MỌI vật đang trong khung (hiện tại/đỉnh); tổng = tracks.
+                cur = int(len(det))
+                self.result.zone_current = cur
+                self.result.zone_peak = max(self.result.zone_peak, cur)
+            self.last_det = det          # cho service crop vật → vector DB + frame bỏ-detect dùng lại
+        else:
+            det = self.last_det          # frame BỎ QUA detect: vẽ lại box gần nhất
 
         self.result.frames += 1
         self.result.unique_tracks = len(self._seen)
         self.result.elapsed_s = time.time() - self._t0
-        self.last_frame, self.last_det = frame_bgr, det   # cho service crop vật → vector DB
+        self.last_frame = frame_bgr
 
         out = None
         if self.annos is not None:
@@ -151,6 +165,31 @@ class StreamingCounter:
             out = _draw(frame_bgr, det, self.scenario, self.line, self.zones_px, self.result,
                         self.w, self.h, cv2, np)
         return out
+
+    # ------------------------------------------------------------------ #
+    def _stabilize_class(self, det):
+        """Gán nhãn LỚP theo track = lớp XUẤT HIỆN NHIỀU NHẤT của track đó.
+
+        YOLO có thể gán CÙNG một xe lúc 'car' lúc 'truck' qua các frame (nhất là khi
+        chạy chậm/ảnh nhỏ) → nhãn + màu + thống kê theo lớp nhấp nháy. Bình chọn đa số
+        theo track cho ra nhãn ỔN ĐỊNH. (Số ĐẾM tổng không đổi — vẫn đếm theo track.)
+        """
+        np = self._np
+        if det.tracker_id is None or not getattr(det, "data", None) or "class_name" not in det.data:
+            return
+        from ..sv_counting import _class_id
+
+        names = list(det.data["class_name"])
+        ids = list(det.class_id) if det.class_id is not None else [0] * len(names)
+        for i, tid in enumerate(det.tracker_id):
+            if tid is None:
+                continue
+            counts = self._track_cls.setdefault(int(tid), {})
+            counts[str(names[i])] = counts.get(str(names[i]), 0) + 1
+            best = max(counts, key=counts.get)          # lớp thấy nhiều nhất tới giờ
+            names[i], ids[i] = best, _class_id(best)
+        det.data["class_name"] = np.array(names)
+        det.class_id = np.array(ids, dtype=int)
 
     # ------------------------------------------------------------------ #
     def stats(self) -> dict:

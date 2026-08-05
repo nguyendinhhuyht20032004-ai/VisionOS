@@ -113,6 +113,42 @@ def test_streaming_counter_fullscreen_counts_whole_frame():
     assert sc_counter.line is None and not sc_counter.polys   # không dựng vạch/vùng
 
 
+class _FlipDet:
+    """1 vật ĐỨNG YÊN nhưng bị gán lớp lúc car lúc truck (mô phỏng YOLO nhiễu nhãn)."""
+
+    def __init__(self, seq):
+        self.seq, self.calls = seq, 0
+
+    def detect(self, frame, prompt):
+        h, w = frame.shape[:2]
+        cls = self.seq[self.calls % len(self.seq)]
+        self.calls += 1
+        d = [Detection(BoundingBox(w * 0.4, 80.0, w * 0.4 + 50, 130.0), cls, 0.9)]
+        return DetectorResult(d, raw="", latency_ms=0.0, model_name="fake")
+
+
+def test_class_stabilized_by_track_majority():
+    # cùng 1 track bị gán car/truck xen kẽ (đa số car) → nhãn ổn định về 'car'
+    seq = ["car", "car", "truck", "car", "car", "truck", "car", "car"]
+    sc, _ = make_scenario("vehicle", "fullscreen", resolution=(320, 180))
+    c = StreamingCounter(sc, _FlipDet(seq), resolution=(320, 180))
+    for _ in range(len(seq)):
+        c.process(np.zeros((180, 320, 3), dtype="uint8"))
+    assert list(c.last_det.data["class_name"]) == ["car"]   # bình chọn đa số
+    assert c.stats()["tracks"] == 1                          # vẫn 1 xe
+
+
+def test_detect_every_skips_detection():
+    # detect_every=3: 9 frame chỉ gọi YOLO ở frame 1,3,6,9 (frame đầu luôn detect) = 4 lần
+    det = _FlipDet(["car"])
+    sc, _ = make_scenario("vehicle", "line", line=[0, 50, 100, 50], resolution=(320, 180))
+    c = StreamingCounter(sc, det, resolution=(320, 180), detect_every=3)
+    out = None
+    for _ in range(9):
+        out = c.process(np.zeros((180, 320, 3), dtype="uint8"))
+    assert det.calls == 4 and out.shape == (180, 320, 3)     # ~1/3 số lần gọi → nhanh hơn
+
+
 def test_streaming_counter_zone_stats():
     sc, _ = make_scenario("object", "zone",
                           zone=[[0, 0], [100, 0], [100, 100], [0, 100]], resolution=(320, 180))
