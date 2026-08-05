@@ -60,8 +60,10 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 - **Model nhẹ + ảnh nhỏ** (mặc định service): `YOLO_WEIGHTS=yolov8n.pt`, `YOLO_IMGSZ=640`,
   `YOLO_CONF=0.3` (ngưỡng cao → ít box mờ gây nhầm). Đây là bộ realtime cho CPU.
 - **`detect_every`** (ô "Detect mỗi N frame" trên web, hoặc field trong POST /api/jobs): chạy YOLO
-  **mỗi N frame** (frame giữa vẽ lại box gần nhất) → nhanh gấp ~N lần. CPU chậm để **2–3**.
-- Tăng `max_fps` (8–15) để hiển thị mượt; kết hợp `detect_every` để giảm tải YOLO.
+  **mỗi N frame** (frame giữa vẽ lại box gần nhất) → nhanh gấp ~N lần. **Để = 1 cho MƯỢT NHẤT**
+  (nhịp đều). Tăng N nhanh hơn nhưng nhịp **không đều** (frame có/không detect nhanh–chậm xen kẽ
+  → hơi giật). Chỉ tăng khi cần throughput cao và chấp nhận hơi giật.
+- Tăng `max_fps` (8–15) để hiển thị mượt hơn.
 
 > Cần chính xác cao hơn (phân biệt loại xe tốt hơn): dùng `yolov8m/x` + `imgsz 960/1280` — nhưng
 > nên có **GPU** để vẫn realtime.
@@ -78,16 +80,20 @@ nhận nhầm nên **đếm sai**. Đã sửa — service **tự phân biệt fi
 - **STREAM** trực tiếp (rtsp/webcam/mjpeg — `frame_count<=0`): giữ **frame mới nhất** + throttle
   `max_fps` như cũ (ưu tiên realtime, bỏ frame trễ). Không đổi hành vi.
 
-**CPU chậm mà vẫn muốn mượt/đúng tốc độ:** để **Detect mỗi N frame = 2–3** (mặc định đã là **2**)
-— YOLO chỉ chạy mỗi N frame, frame giữa vẽ lại box cũ (rất nhẹ) nên hiển thị mượt gần realtime.
-Model quá nặng so với CPU thì video **chạy hơi chậm hơn thực nhưng vẫn MƯỢT + đúng thứ tự** (không
-giật) → muốn đúng realtime hơn thì dùng `yolov8n` + `imgsz 640`, tăng `detect_every`, hoặc GPU.
+**Muốn MƯỢT nhất:** để **Detect mỗi N frame = 1** (mặc định) → mỗi frame xử lý như nhau nên nhịp
+**ĐỀU** (không giật). Đặt N=2,3… tuy nhanh hơn nhưng frame detect (chậm) xen frame vẽ-lại (nhanh)
+→ nhịp **không đều = hơi giật**. Model quá nặng so với CPU thì video chạy hơi chậm hơn thực nhưng
+vẫn **MƯỢT + đúng thứ tự** → muốn nhanh hơn dùng `yolov8n` + `imgsz 640` (mặc định) hoặc GPU.
 Rebuild để nhận bản vá.
 
 ## 🚗 Phân loại xe (car/truck/bus) & vạch sót làn ngoài
 - **Phân loại LOẠI XE:** service dùng **YOLO COCO**, phân biệt **car / truck / bus** (+ motorcycle),
   mỗi loại **một màu** riêng. **Mặc định GIỮ phân loại** (không gộp). Muốn gộp tất cả về 1 nhãn
   "vehicle" (1 màu) thì **tick ô** trên web hoặc gửi `"group_label": true`.
+- **Cùng 1 xe bị gán TRÙNG 2 nhãn (vd vừa "truck" vừa "bus"):** NMS của YOLO mặc định theo TỪNG
+  lớp nên 2 box chồng khít khác lớp đều được giữ. Đã thêm **NMS class-agnostic** (gộp box chồng
+  > 0.8 IoU bất kể lớp, giữ box conf cao nhất) → **mỗi xe 1 box, 1 nhãn**. Chỉnh ngưỡng qua env
+  `YOLO_DEDUP_IOU` (mặc định 0.8; đặt ≥1 để tắt).
 - **Xe cao (cứu thương/thùng cao) đôi khi bị gọi truck/bus:** đây là giới hạn của COCO (chỉ có
   car/truck/bus/motorcycle, không có lớp riêng cho các xe đó) — chấp nhận, hoặc **gộp** về
   "vehicle" cho gọn nếu không cần tách loại. *(Đã ổn định nhãn theo track nên không còn nhấp

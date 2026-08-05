@@ -3,6 +3,7 @@
 Không cần cài ``ultralytics`` — chỉ dựng object 'boxes' giả giống output của nó.
 """
 
+from recognition.base import BoundingBox, Detection
 from recognition.detectors.ultralytics_yolo import UltralyticsYoloDetector
 
 
@@ -58,6 +59,32 @@ def test_wanted_classes_from_prompt():
 def test_explicit_want_overrides_prompt():
     det = UltralyticsYoloDetector(want={"truck"})
     assert det._wanted_classes("person") == {"truck"}
+
+
+def test_dedup_cross_class_removes_truck_bus_on_same_vehicle():
+    # Cùng 1 xe: YOLO ra 'truck' (0.6) + 'bus' (0.5) box CHỒNG KHÍT → giữ 1 (conf cao nhất).
+    dets = [
+        Detection(BoundingBox(100, 100, 200, 180), "truck", 0.6),
+        Detection(BoundingBox(103, 98, 198, 182), "bus", 0.5),   # ~trùng khít với box trên
+    ]
+    out = UltralyticsYoloDetector._dedup_cross_class(dets, iou_thr=0.8)
+    assert len(out) == 1
+    assert out[0].label == "truck"                                # giữ box conf cao hơn
+
+
+def test_dedup_keeps_distinct_nearby_objects():
+    # 2 vật KHÁC nhau đứng cạnh (chồng ít) → GIỮ cả hai (không gộp nhầm).
+    dets = [
+        Detection(BoundingBox(0, 0, 50, 100), "person", 0.9),
+        Detection(BoundingBox(60, 0, 110, 100), "person", 0.8),   # cạnh nhau, IoU=0
+    ]
+    out = UltralyticsYoloDetector._dedup_cross_class(dets, iou_thr=0.8)
+    assert len(out) == 2
+
+
+def test_iou_basic():
+    assert UltralyticsYoloDetector._iou((0, 0, 10, 10), (0, 0, 10, 10)) == 1.0
+    assert UltralyticsYoloDetector._iou((0, 0, 10, 10), (20, 20, 30, 30)) == 0.0
 
 
 def test_load_standard_detector_falls_back_to_ultralytics():

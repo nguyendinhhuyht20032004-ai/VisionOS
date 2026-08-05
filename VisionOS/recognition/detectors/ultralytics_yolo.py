@@ -67,6 +67,8 @@ class UltralyticsYoloDetector:
         self.tile = os.environ.get("YOLO_TILE", "0") == "1"
         self.tile_wh = int(os.environ.get("YOLO_TILE_WH", "640"))
         self.tile_overlap = int(os.environ.get("YOLO_TILE_OVERLAP", "128"))
+        # Bỏ box TRÙNG khác lớp (cùng 1 xe vừa 'truck' vừa 'bus'). 0/≥1 = tắt. Env YOLO_DEDUP_IOU.
+        self.dedup_iou = float(os.environ.get("YOLO_DEDUP_IOU", "0.8"))
         self._model = None
         self._names = None
         self._slicer = None
@@ -130,6 +132,37 @@ class UltralyticsYoloDetector:
         return {p}
 
     @staticmethod
+    def _iou(a, b) -> float:
+        """IoU của 2 hộp xyxy."""
+        ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+        ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+        iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0.0:
+            return 0.0
+        area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+        area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+        union = area_a + area_b - inter
+        return inter / union if union > 0.0 else 0.0
+
+    @staticmethod
+    def _dedup_cross_class(dets: List[Detection], iou_thr: float = 0.8) -> List[Detection]:
+        """Bỏ box TRÙNG KHÁC LỚP cho CÙNG 1 vật (vd cùng 1 xe vừa gán 'truck' vừa 'bus').
+
+        NMS của YOLO mặc định theo TỪNG lớp → 2 box chồng nhau nhưng khác lớp đều được giữ
+        (cùng 1 xe ra 2 nhãn). Đây là NMS **class-agnostic**: duyệt theo conf giảm dần, bỏ box
+        nào chồng > ``iou_thr`` lên box đã giữ (BẤT KỂ lớp) → mỗi vật 1 box, giữ lớp conf cao nhất.
+        (Ngưỡng cao ~0.8 nên chỉ gộp box gần TRÙNG KHÍT — không đụng 2 vật khác nhau đứng cạnh.)
+        """
+        kept: List[Detection] = []
+        for d in sorted(dets, key=lambda x: x.confidence, reverse=True):
+            box = d.bbox.as_xyxy()
+            if any(UltralyticsYoloDetector._iou(box, k.bbox.as_xyxy()) >= iou_thr for k in kept):
+                continue
+            kept.append(d)
+        return kept
+
+    @staticmethod
     def _boxes_to_detections(boxes, names, want: Set[str]) -> List[Detection]:
         """Quy đổi ``result.boxes`` của ultralytics → list ``Detection`` (đã lọc lớp).
 
@@ -162,6 +195,9 @@ class UltralyticsYoloDetector:
                                  augment=self.augment, verbose=False)[0]
             dets = self._boxes_to_detections(result.boxes, self._names, want)
             mode = "full"
+        # Gộp box trùng khác lớp (cùng 1 xe 'truck'+'bus') → mỗi vật 1 nhãn.
+        if 0.0 < self.dedup_iou < 1.0 and len(dets) > 1:
+            dets = self._dedup_cross_class(dets, self.dedup_iou)
         return DetectorResult(
             dets,
             raw=f"{len(dets)} dets ({mode})",

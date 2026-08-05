@@ -339,7 +339,7 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
     <option value="fullscreen">Toàn màn hình (không cần vẽ)</option>
   </select>
   <label>max_fps</label><input id="fps" value="8">
-  <label>Detect mỗi N frame (CPU chậm → để 2–3 cho mượt hơn)</label><input id="dev" value="2">
+  <label>Detect mỗi N frame (1 = mượt/đều nhất; tăng = nhanh hơn nhưng có thể giật hơn)</label><input id="dev" value="1">
   <button onclick="startJob()">▶ Bắt đầu đếm</button>
   <button class="stop" onclick="stopJob()">■ Dừng</button>
   <button class="warn" onclick="resetDraw()">↺ Vẽ lại</button>
