@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+*.ipynb
+*.xlsx
+*.mp4
+videos/
+geom_preview/
+scen_out/
+scen_q/
+label_trace_out/
+yolo_count_out/
+hardq_out/
+*.md
+!SERVICE.md

@@ -1,0 +1,18 @@
+# Phụ thuộc cho AI SERVICE đếm theo camera (recognition/service) — dùng cho Docker.
+#   pip install -r requirements-service.txt
+# --- API ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9          # nhận upload ảnh/frame (để vẽ vạch/vùng)
+# --- Thị giác máy: detect (YOLO) + track/đếm (supervision) ---
+ultralytics>=8.2                 # YOLOv8 / YOLO11
+supervision>=0.21                # ByteTrack + LineZone + PolygonZone + annotator
+opencv-python-headless>=4.9
+numpy>=1.24
+# torch + TORCHVISION: PHẢI cài CÙNG LÚC, KHỚP phiên bản. Thiếu/lệch torchvision →
+# "RuntimeError: operator torchvision::nms does not exist" khi YOLO chạy NMS.
+# Mặc định bản CPU (chạy mọi nơi). GPU → xem Dockerfile (ARG TORCH_CUDA=cu121).
+torch>=2.2
+torchvision>=0.17
+# --- Vector database (ReID / tìm kiếm / lịch sử sự kiện) ---
+qdrant-client>=1.9

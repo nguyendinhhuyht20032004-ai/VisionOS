@@ -11,6 +11,7 @@ môi trường không có sẵn (phần test dùng detector giả / result giả
 
 from __future__ import annotations
 
+import os
 import time
 from typing import List, Optional, Set
 
@@ -21,23 +22,56 @@ __all__ = ["UltralyticsYoloDetector"]
 
 
 class UltralyticsYoloDetector:
-    """Detector YOLOv8 (ultralytics) cho đối tượng COCO: người, xe…"""
+    """Detector YOLOv8 (ultralytics) cho đối tượng COCO: người, xe…
+
+    ĐỂ ĐẾM ÍT BỎ SÓT NGƯỜI/XE (recall cao), mặc định mạnh tay:
+      * **yolov8x** — bản LỚN NHẤT họ YOLOv8 (recall cao nhất; nano/m hay bỏ sót
+        người xa/nhỏ, xe khuất). Env ``YOLO_WEIGHTS`` đổi (yolov8m.pt cho nhanh,
+        hoặc yolo11x.pt/yolov9e.pt nếu muốn mới hơn).
+      * **conf=0.15** — ngưỡng THẤP để bắt cả vật mờ/khuất (bỏ sót giảm; nhiễu thừa
+        do tracker + min-track lọc bớt). Env ``YOLO_CONF``.
+      * **imgsz=1280** — ảnh lớn → vật NHỎ/ở xa rõ hơn → bắt được. Env ``YOLO_IMGSZ``.
+      * **max_det=1000** — cảnh ĐÔNG (đám đông, kẹt xe) không bị cắt ở 300. Env ``YOLO_MAX_DET``.
+      * **augment (TTA)** — bật ``YOLO_AUGMENT=1`` để tăng recall thêm (chậm hơn ~2-3×).
+    """
 
     def __init__(
         self,
-        weights: str = "yolov8n.pt",
-        confidence: float = 0.35,
+        weights: Optional[str] = None,
+        confidence: Optional[float] = None,
         iou: float = 0.5,
         want: Optional[Set[str]] = None,
         device: Optional[str] = None,
+        imgsz: Optional[int] = None,
     ):
-        self.weights = weights
-        self.confidence = confidence
+        # yolov8x (lớn nhất) — RECALL cao nhất, giảm BỎ SÓT người/xe. Đổi bằng YOLO_WEIGHTS.
+        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8x.pt")
+        self.confidence = (confidence if confidence is not None
+                           else float(os.environ.get("YOLO_CONF", "0.15")))
         self.iou = iou
-        self.want = set(want) if want else None  # None = suy ra từ prompt
+        self.imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "1280"))
+        # max_det: cảnh đông không bị chặn ở 300 (mặc định ultralytics). augment=TTA.
+        self.max_det = int(os.environ.get("YOLO_MAX_DET", "1000"))
+        self.augment = os.environ.get("YOLO_AUGMENT", "0") == "1"
+        # Lớp cần giữ: ưu tiên tham số, rồi env YOLO_CLASSES (cho model tuỳ biến như
+        # VisDrone có tên lớp khác COCO), None = suy ra từ prompt.
+        if want:
+            self.want = set(want)
+        elif os.environ.get("YOLO_CLASSES"):
+            self.want = {c.strip().lower() for c in os.environ["YOLO_CLASSES"].split(",") if c.strip()}
+        else:
+            self.want = None
         self.device = device
+        # TILED inference (SAHI): cắt ảnh thành ô nhỏ rồi chạy YOLO từng ô → vật NHỎ
+        # (xe top-down/aerial) to hơn trong ô nên detect được. Bật qua YOLO_TILE=1.
+        self.tile = os.environ.get("YOLO_TILE", "0") == "1"
+        self.tile_wh = int(os.environ.get("YOLO_TILE_WH", "640"))
+        self.tile_overlap = int(os.environ.get("YOLO_TILE_OVERLAP", "128"))
+        # Bỏ box TRÙNG khác lớp (cùng 1 xe vừa 'truck' vừa 'bus'). 0/≥1 = tắt. Env YOLO_DEDUP_IOU.
+        self.dedup_iou = float(os.environ.get("YOLO_DEDUP_IOU", "0.8"))
         self._model = None
         self._names = None
+        self._slicer = None
 
     def load(self):
         try:
@@ -54,12 +88,38 @@ class UltralyticsYoloDetector:
             from ultralytics import YOLO
 
         t0 = time.time()
-        self._model = YOLO(self.weights)      # tự tải weight lần đầu
+        w = self._resolve_weights(self.weights)   # hf://… → tải về; URL/path để nguyên
+        # RT-DETR (detector transformer của supervision demo) dùng class riêng; YOLO cho phần còn lại.
+        if "rtdetr" in w.lower() or "rt-detr" in w.lower():
+            try:
+                from ultralytics import RTDETR
+
+                self._model = RTDETR(w)
+            except Exception:  # noqa: BLE001 — ultralytics cũ → thử YOLO()
+                self._model = YOLO(w)
+        else:
+            self._model = YOLO(w)             # tự tải weight (kể cả http URL) lần đầu
         if self.device:
             self._model.to(self.device)
         self._names = self._model.names       # dict {id: 'person', ...}
-        print(f"✅ YOLOv8 ({self.weights}) loaded in {time.time() - t0:.1f}s")
+        print(f"✅ YOLOv8 ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}, "
+              f"max_det={self.max_det}, TTA={self.augment}) loaded in {time.time() - t0:.1f}s")
         return self
+
+    @staticmethod
+    def _resolve_weights(w: str) -> str:
+        """``hf://repo_id/đường/dẫn.pt`` → tải từ HuggingFace về path cục bộ. Còn lại
+        (tên yolo, path, http URL) để nguyên cho ultralytics tự xử lý (nó tải URL được).
+        """
+        if w.startswith("hf://"):
+            from huggingface_hub import hf_hub_download
+
+            parts = w[len("hf://"):].split("/")
+            repo_id = "/".join(parts[:2])          # owner/name
+            filename = "/".join(parts[2:]) or "best.pt"
+            print(f"⬇️  tải model từ HuggingFace: {repo_id} / {filename}")
+            return hf_hub_download(repo_id=repo_id, filename=filename)
+        return w
 
     def _wanted_classes(self, prompt: str) -> Set[str]:
         """Suy ra tập lớp COCO cần giữ từ prompt (khớp COCO_ALIASES của YOLO-NAS)."""
@@ -72,6 +132,37 @@ class UltralyticsYoloDetector:
         return {p}
 
     @staticmethod
+    def _iou(a, b) -> float:
+        """IoU của 2 hộp xyxy."""
+        ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+        ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+        iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0.0:
+            return 0.0
+        area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+        area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+        union = area_a + area_b - inter
+        return inter / union if union > 0.0 else 0.0
+
+    @staticmethod
+    def _dedup_cross_class(dets: List[Detection], iou_thr: float = 0.8) -> List[Detection]:
+        """Bỏ box TRÙNG KHÁC LỚP cho CÙNG 1 vật (vd cùng 1 xe vừa gán 'truck' vừa 'bus').
+
+        NMS của YOLO mặc định theo TỪNG lớp → 2 box chồng nhau nhưng khác lớp đều được giữ
+        (cùng 1 xe ra 2 nhãn). Đây là NMS **class-agnostic**: duyệt theo conf giảm dần, bỏ box
+        nào chồng > ``iou_thr`` lên box đã giữ (BẤT KỂ lớp) → mỗi vật 1 box, giữ lớp conf cao nhất.
+        (Ngưỡng cao ~0.8 nên chỉ gộp box gần TRÙNG KHÍT — không đụng 2 vật khác nhau đứng cạnh.)
+        """
+        kept: List[Detection] = []
+        for d in sorted(dets, key=lambda x: x.confidence, reverse=True):
+            box = d.bbox.as_xyxy()
+            if any(UltralyticsYoloDetector._iou(box, k.bbox.as_xyxy()) >= iou_thr for k in kept):
+                continue
+            kept.append(d)
+        return kept
+
+    @staticmethod
     def _boxes_to_detections(boxes, names, want: Set[str]) -> List[Detection]:
         """Quy đổi ``result.boxes`` của ultralytics → list ``Detection`` (đã lọc lớp).
 
@@ -82,7 +173,7 @@ class UltralyticsYoloDetector:
         for b in boxes:
             cls_id = int(b.cls[0])
             name = names[cls_id]
-            if want and name not in want:
+            if want and name.lower() not in want:
                 continue
             conf = float(b.conf[0])
             x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())
@@ -95,11 +186,63 @@ class UltralyticsYoloDetector:
             self.load()
         t0 = time.time()
         want = self._wanted_classes(prompt)
-        result = self._model(frame, conf=self.confidence, iou=self.iou, verbose=False)[0]
-        dets = self._boxes_to_detections(result.boxes, self._names, want)
+        if self.tile:
+            dets = self._detect_tiled(frame, want)
+            mode = "tiled"
+        else:
+            result = self._model(frame, conf=self.confidence, iou=self.iou,
+                                 imgsz=self.imgsz, max_det=self.max_det,
+                                 augment=self.augment, verbose=False)[0]
+            dets = self._boxes_to_detections(result.boxes, self._names, want)
+            mode = "full"
+        # Gộp box trùng khác lớp (cùng 1 xe 'truck'+'bus') → mỗi vật 1 nhãn.
+        if 0.0 < self.dedup_iou < 1.0 and len(dets) > 1:
+            dets = self._dedup_cross_class(dets, self.dedup_iou)
         return DetectorResult(
             dets,
-            raw=f"{len(dets)} dets",
+            raw=f"{len(dets)} dets ({mode})",
             latency_ms=(time.time() - t0) * 1000,
-            model_name=f"YOLOv8/ultralytics ({self.weights})",
+            model_name=f"YOLOv8/ultralytics ({self.weights}{'+tiled' if self.tile else ''})",
         )
+
+    def _detect_tiled(self, frame, want: Set[str]) -> List[Detection]:
+        """Chạy YOLO **toàn ảnh + trên nhiều Ô cắt** rồi gộp NMS (supervision).
+
+        - Ô cắt (InferenceSlicer): bắt vật NHỎ/ở xa (aerial, đám đông xa) — nhỏ trong
+          ảnh gốc nhưng to trong từng ô.
+        - Toàn ảnh: bắt vật TO ở gần (tiling thuần dễ cắt đôi vật lớn hơn 1 ô).
+        Gộp 2 nguồn + NMS → phủ cả gần lẫn xa. Chậm hơn ~(số ô + 1) lần.
+        """
+        import supervision as sv
+
+        if self._slicer is None:
+            def _cb(img_slice):
+                r = self._model(img_slice, conf=self.confidence, iou=self.iou,
+                                max_det=self.max_det, augment=self.augment, verbose=False)[0]
+                return sv.Detections.from_ultralytics(r)
+
+            wh = (self.tile_wh, self.tile_wh)
+            try:                                    # supervision mới: overlap_wh (pixel)
+                self._slicer = sv.InferenceSlicer(
+                    callback=_cb, slice_wh=wh,
+                    overlap_wh=(self.tile_overlap, self.tile_overlap))
+            except TypeError:                       # bản cũ: overlap_ratio_wh (tỉ lệ)
+                self._slicer = sv.InferenceSlicer(
+                    callback=_cb, slice_wh=wh, overlap_ratio_wh=(0.2, 0.2))
+
+        full = self._model(frame, conf=self.confidence, iou=self.iou,
+                           imgsz=self.imgsz, max_det=self.max_det,
+                           augment=self.augment, verbose=False)[0]
+        det = sv.Detections.merge([sv.Detections.from_ultralytics(full), self._slicer(frame)])
+        if len(det):
+            det = det.with_nms(threshold=self.iou)
+
+        dets: List[Detection] = []
+        for i in range(len(det)):
+            name = self._names[int(det.class_id[i])]
+            if want and name.lower() not in want:
+                continue
+            x1, y1, x2, y2 = (float(v) for v in det.xyxy[i])
+            conf = float(det.confidence[i]) if det.confidence is not None else 0.85
+            dets.append(Detection(BoundingBox(x1, y1, x2, y2), name, conf))
+        return dets

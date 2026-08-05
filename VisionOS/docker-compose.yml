@@ -1,0 +1,43 @@
+# AI service (FastAPI + YOLO + supervision) + Qdrant (vector DB).
+#   docker compose up --build
+# Mở: http://localhost:8000  (Qdrant dashboard: http://localhost:6333/dashboard)
+services:
+  api:
+    build:
+      context: .
+      args:
+        TORCH_CUDA: cpu          # đổi 'cu121' để build bản GPU
+    ports:
+      - "8000:8000"
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      # MẶC ĐỊNH REALTIME trên CPU (local, không GPU). GPU → yolov8x.pt + YOLO_IMGSZ=1280 (recall cao hơn).
+      - YOLO_WEIGHTS=yolov8n.pt   # nhẹ nhất → realtime CPU (m/x chính xác hơn nhưng chậm, cần GPU)
+      - YOLO_IMGSZ=640            # ảnh nhỏ → nhanh (1280 cần GPU)
+      - YOLO_CONF=0.3             # ngưỡng cao hơn → ít box mờ/nhầm car↔truck
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+    volumes:
+      # Đặt video vào thư mục ./data (cạnh file này) → trong container là /data/<tên>.mp4.
+      # Nhập nguồn trên web = /data/ten.mp4 để "Lấy frame" đọc được (container KHÔNG thấy ổ máy Mac/Windows).
+      - ./data:/data
+    # --- GPU: bỏ comment khối dưới + build với TORCH_CUDA=cu121 ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"              # REST/gRPC + dashboard
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
