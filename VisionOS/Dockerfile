@@ -24,8 +24,10 @@ WORKDIR /app
 # torch: CPU mặc định; đặt --build-arg TORCH_CUDA=cu121 để lấy bản GPU.
 ARG TORCH_CUDA=cpu
 COPY requirements-service.txt .
+# QUAN TRỌNG: cài torch + torchvision CÙNG LÚC, CÙNG NGUỒN (khớp phiên bản) — nếu không
+# sẽ lỗi "operator torchvision::nms does not exist" khi YOLO chạy NMS.
 RUN pip install --upgrade pip && \
-    pip install --index-url https://download.pytorch.org/whl/${TORCH_CUDA} torch && \
+    pip install --index-url https://download.pytorch.org/whl/${TORCH_CUDA} torch torchvision && \
     pip install -r requirements-service.txt
 
 # Nạp sẵn trọng số YOLO vào image (khỏi tải lại mỗi lần chạy container).

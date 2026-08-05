@@ -23,13 +23,24 @@ YOLO_IMGSZ=640            # ảnh nhỏ → nhanh hơn (960/1280 chậm trên CP
 # max_fps thấp (2–4) khi tạo job để đỡ nghẽn CPU
 ```
 
-**Không cần Docker** (chạy thẳng, pip cài torch bản CPU mặc định):
+**Không cần Docker** (chạy thẳng):
 ```bash
-pip install -r requirements-service.txt          # torch CPU + ultralytics + supervision + fastapi…
+# 1) Cài torch + torchvision KHỚP nhau (CPU) TRƯỚC — TRÁNH lỗi torchvision::nms
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# 2) Cài phần còn lại + chạy
+pip install -r requirements-service.txt          # ultralytics + supervision + fastapi…
 python run_service.py --host 0.0.0.0 --port 8000 # mở http://localhost:8000
 # (Vector DB tự chạy in-memory nếu không có Qdrant — vẫn đếm + tìm kiếm bình thường.)
 ```
 Tốc độ tham khảo trên CPU: yolov8n@640 ~ vài–chục fps · yolov8m@960 ~ 1–5 fps · yolov8x@1280 rất chậm.
+
+### 🩺 Lỗi thường gặp
+- **`RuntimeError: operator torchvision::nms does not exist`** — torch và **torchvision LỆCH
+  phiên bản** (hay thiếu torchvision). Cài lại KHỚP nhau:
+  ```bash
+  pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu
+  ```
+  (GPU: đổi `cpu` → `cu121`.) Sau đó chạy lại service. Docker: build lại (`docker compose build --no-cache`).
 
 ## ✏️ Vẽ vạch/vùng rồi ĐẾM (trên trang web)
 Mở `http://localhost:8000` → nhập nguồn → **📷 Lấy frame** → chọn kiểu đếm → **VẼ** trực tiếp
