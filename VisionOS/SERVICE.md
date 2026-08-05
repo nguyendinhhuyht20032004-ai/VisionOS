@@ -46,8 +46,11 @@ Tốc độ tham khảo trên CPU: yolov8n@640 ~ vài–chục fps · yolov8m@96
     rồi nhập nguồn **`/data/<tên>.mp4`**. (Container không thấy ổ đĩa Mac/Windows.)
   - **Webcam `0`** → KHÔNG dùng được trong Docker (nhất là Mac). Chạy bằng **pip** (không Docker)
     để dùng webcam, hoặc dùng app IP-camera trên điện thoại (RTSP/HTTP).
-  - **RTSP/HTTP** → kiểm tra URL + mạng tới được từ container. Test nhanh bằng 1 URL video mp4 công khai.
-  - Thông báo lỗi trên web giờ đã ghi RÕ nguyên nhân theo từng loại nguồn.
+  - **RTSP** → đã ép **TCP** (`OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;tcp`) cho bền trong
+    Docker (UDP hay rớt qua NAT) + timeout lấy-frame nới lên **20s** (RTSP mở chậm hơn file).
+    RTSP công khai trên mạng hay **chập chờn/sập** — nếu vẫn lỗi, thử URL khác hoặc 1 file `.mp4`
+    trong `./data` để xác nhận service OK. Camera cần UDP thì đặt env đó = `rtsp_transport;udp`.
+  - **HTTP** → dùng URL trỏ THẲNG tới file/luồng video (mp4/mjpeg). Thông báo lỗi trên web đã ghi RÕ nguyên nhân.
 
 ## ⚡ Chạy REALTIME + hết nhầm car/truck
 Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng 1 xe lúc gán car lúc truck**.
