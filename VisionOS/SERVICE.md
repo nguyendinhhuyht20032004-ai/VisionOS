@@ -68,23 +68,22 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 > Cần chính xác cao hơn (phân biệt loại xe tốt hơn): dùng `yolov8m/x` + `imgsz 960/1280` — nhưng
 > nên có **GPU** để vẫn realtime.
 
-### ▶️ Video FILE chạy TUA NHANH / GIẬT (nhanh–chậm) → đếm sai?
-Kiến trúc đọc frame mặc định là kiểu **camera trực tiếp**: luồng nền chỉ giữ **frame mới nhất**
-(bỏ frame cũ để realtime). Với **file** thì sai: OpenCV giải mã nhanh hết cỡ, model lúc nhanh
-lúc chậm → reader nhảy vượt số frame không đều → video **tua nhanh + giật (nhanh–chậm)**, tracker
-nhận nhầm nên **đếm sai**. Đã sửa — service **tự phân biệt file vs stream**:
+### ▶️ Video chậm / giật, không mượt như bản gốc?
+YOLO trên CPU chậm hơn tốc độ video. Nếu MỖI frame phải đợi YOLO xong mới hiện thì tất nhiên
+**vừa chậm vừa giật**. Đã sửa bằng cách **TÁCH 2 LUỒNG** (như các app CV realtime):
 
-- **FILE** (`/data/x.mp4` hoặc URL .mp4 — đọc được tổng số frame): đọc **ĐỦ frame, ĐÚNG THỨ TỰ**
-  (hàng đợi có backpressure, **không bỏ frame**) và **phát đúng FPS gốc** → mượt, đúng tốc độ,
-  đếm chính xác. Job xử lý MỌI frame theo thứ tự (không throttle theo `max_fps` nữa).
-- **STREAM** trực tiếp (rtsp/webcam/mjpeg — `frame_count<=0`): giữ **frame mới nhất** + throttle
-  `max_fps` như cũ (ưu tiên realtime, bỏ frame trễ). Không đổi hành vi.
+- **Luồng HIỂN THỊ** (nhẹ): phát **mọi frame ở đúng FPS gốc**, chỉ *vẽ lại* box gần nhất →
+  video **mượt, đúng tốc độ như bản gốc** (không đợi YOLO).
+- **Luồng YOLO** (nặng, chạy NỀN): lấy frame mới nhất, phát hiện + đếm nhanh hết mức CPU cho
+  phép, cập nhật box cho luồng hiển thị dùng. Box có thể trễ vài frame — gần như không thấy.
 
-**Muốn MƯỢT nhất:** để **Detect mỗi N frame = 1** (mặc định) → mỗi frame xử lý như nhau nên nhịp
-**ĐỀU** (không giật). Đặt N=2,3… tuy nhanh hơn nhưng frame detect (chậm) xen frame vẽ-lại (nhanh)
-→ nhịp **không đều = hơi giật**. Model quá nặng so với CPU thì video chạy hơi chậm hơn thực nhưng
-vẫn **MƯỢT + đúng thứ tự** → muốn nhanh hơn dùng `yolov8n` + `imgsz 640` (mặc định) hoặc GPU.
-Rebuild để nhận bản vá.
+Nhờ vậy, dù CPU chỉ chạy YOLO ~8–12 fps, **video vẫn phát mượt ở 25–30 fps** (đếm trên các frame
+YOLO kịp xử lý — ByteTrack bù khoảng trống nên số đếm vẫn ổn). File đọc **đúng FPS gốc** (không
+tua nhanh); camera/RTSP giữ frame mới nhất + `max_fps` như cũ.
+
+> Muốn box bám sát hơn / đếm dày hơn: dùng CPU mạnh hơn hoặc **GPU** (YOLO nhanh → luồng nền
+> theo kịp gần từng frame). `detect_every` vẫn có (áp cho nhánh đồng bộ), mặc định 1. Rebuild
+> để nhận bản vá.
 
 ## 🚗 Phân loại xe (car/truck/bus) & vạch sót làn ngoài
 - **Phân loại LOẠI XE:** service dùng **YOLO COCO**, phân biệt **car / truck / bus** (+ motorcycle),

@@ -77,6 +77,32 @@ class _FakeDet:
         return DetectorResult(d, raw="", latency_ms=0.0, model_name="fake")
 
 
+def test_detect_render_split_for_async_display():
+    # detect() = NẶNG (YOLO + đếm), render() = NHẸ (vẽ) → cho phép tách luồng: hiển thị mọi
+    # frame mượt (render), YOLO chạy nền (detect). render(None) không lỗi (chưa có detect).
+    sc, _ = make_scenario("object", "fullscreen", resolution=(320, 180))
+    c = StreamingCounter(sc, _FakeDet(3), resolution=(320, 180))
+    frame = np.zeros((180, 320, 3), dtype="uint8")
+
+    out0 = c.render(frame, None)                     # chưa detect → trả frame (không crash)
+    assert out0 is not None and out0.shape == (180, 320, 3)
+
+    det = c.detect(frame)                            # nặng: cập nhật đếm + last_det
+    assert det is not None and c.last_det is not None
+    assert c.stats()["peak"] >= 1                    # fullscreen thấy vật
+
+    out1 = c.render(frame, det)                      # nhẹ: vẽ det lên frame
+    assert out1 is not None and out1.shape == (180, 320, 3)
+
+
+def test_process_still_equals_detect_plus_render():
+    # process() (đồng bộ, cho test/notebook) vẫn = detect + render.
+    sc, _ = make_scenario("object", "line", line=[0, 50, 100, 50], resolution=(320, 180))
+    c = StreamingCounter(sc, _FakeDet(6), resolution=(320, 180))
+    out = c.process(np.zeros((180, 320, 3), dtype="uint8"))
+    assert out is not None and out.shape == (180, 320, 3)
+
+
 def test_streaming_counter_counts_crossing_and_annotates():
     n = 14
     sc, _ = make_scenario("object", "line", line=[0, 50, 100, 50], resolution=(320, 180))

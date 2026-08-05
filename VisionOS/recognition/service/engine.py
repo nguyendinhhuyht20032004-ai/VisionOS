@@ -106,8 +106,12 @@ class StreamingCounter:
         self.merge_label = merge_label
 
     # ------------------------------------------------------------------ #
-    def process(self, frame_bgr):
-        """Xử lý 1 frame BGR → trả frame ĐÃ ANNOTATE (BGR). Cập nhật số đếm nội bộ."""
+    def detect(self, frame_bgr):
+        """PHÁT HIỆN + bám + ĐẾM cho 1 frame (phần NẶNG — chạy YOLO). Trả ``det`` (sv.Detections).
+
+        KHÔNG vẽ. Tách riêng để service chạy ở LUỒNG NỀN, còn luồng hiển thị chỉ ``render``
+        (nhẹ) mỗi frame ở tốc độ gốc → video mượt như bản gốc dù YOLO trên CPU chậm hơn.
+        """
         import cv2
 
         sv, np = self._sv, self._np
@@ -115,8 +119,7 @@ class StreamingCounter:
             frame_bgr = cv2.resize(frame_bgr, (self.w, self.h))
 
         self._frame_i += 1
-        # detect_every>1: chỉ chạy YOLO mỗi N frame (nặng nhất) → throughput cao hơn trên CPU.
-        # Frame bỏ qua: vẽ lại box GẦN NHẤT (không đếm lại) → video vẫn mượt.
+        # detect_every>1: chỉ chạy YOLO mỗi N frame (dùng ở nhánh đồng bộ). Nhánh nền để =1.
         do_detect = (self._frame_i % self.detect_every == 0) or self.last_det is None
 
         if do_detect:
@@ -155,14 +158,31 @@ class StreamingCounter:
                 cur = int(len(det))
                 self.result.zone_current = cur
                 self.result.zone_peak = max(self.result.zone_peak, cur)
-            self.last_det = det          # cho service crop vật → vector DB + frame bỏ-detect dùng lại
+            self.last_det = det          # cho service crop vật → vector DB + luồng hiển thị vẽ lại
         else:
-            det = self.last_det          # frame BỎ QUA detect: vẽ lại box gần nhất
+            det = self.last_det          # frame BỎ QUA detect: dùng box gần nhất
 
         self.result.frames += 1
         self.result.unique_tracks = len(self._seen)
         self.result.elapsed_s = time.time() - self._t0
         self.last_frame = frame_bgr
+        return det
+
+    def render(self, frame_bgr, det=None):
+        """VẼ (phần NHẸ) — annotate ``det`` (mặc định lấy det gần nhất) lên frame. KHÔNG đếm.
+
+        Dùng ở luồng hiển thị: gọi MỖI frame ở tốc độ gốc để video mượt; box lấy từ luồng
+        detect nền (trễ vài frame — không đáng kể). det=None (chưa có detect) → trả frame gốc.
+        """
+        import cv2
+
+        sv, np = self._sv, self._np
+        if frame_bgr.shape[1::-1] != (self.w, self.h):
+            frame_bgr = cv2.resize(frame_bgr, (self.w, self.h))
+        if det is None:
+            det = self.last_det
+        if det is None:
+            return frame_bgr             # chưa có detect nào → hiện frame gốc (vài chục ms đầu)
 
         out = None
         if self.annos is not None:
@@ -175,6 +195,11 @@ class StreamingCounter:
             out = _draw(frame_bgr, det, self.scenario, self.line, self.zones_px, self.result,
                         self.w, self.h, cv2, np)
         return out
+
+    def process(self, frame_bgr):
+        """detect + render trong 1 lượt (đồng bộ) — cho test/notebook và nguồn không cần tách luồng."""
+        det = self.detect(frame_bgr)
+        return self.render(frame_bgr, det)
 
     # ------------------------------------------------------------------ #
     def _stabilize_class(self, det):
