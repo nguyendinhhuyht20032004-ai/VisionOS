@@ -12,10 +12,6 @@ import threading
 import time
 from typing import Optional
 
-# RTSP trong Docker hay RỚT qua UDP (NAT) → ép ffmpeg dùng TCP cho ỔN ĐỊNH. OpenCV đọc biến
-# này khi tạo VideoCapture; đặt sớm (lúc import) để áp cho mọi nguồn. Cho override qua env.
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
-
 __all__ = ["FrameSource", "parse_source", "grab_snapshot", "encode_jpeg"]
 
 
@@ -27,21 +23,11 @@ def parse_source(source):
     return int(s) if s.isdigit() else s
 
 
-def grab_snapshot(source, timeout: Optional[float] = None, warmup: int = 2):
-    """Lấy 1 FRAME từ nguồn (để người dùng VẼ vạch/vùng lên đó). Trả ndarray BGR hoặc None.
-
-    File LOCAL thiếu → trả None NGAY. Stream (rtsp/http) kết nối CHẬM hơn → timeout dài hơn
-    (mặc định 20s) và cho reconnect; file thì 8s là đủ.
-    """
+def _grab_once(source, reconnect, timeout, warmup):
+    """1 lần thử lấy frame (dùng FrameSource, đọc ở thread nền nên KHÔNG treo quá timeout)."""
     import time as _t
 
-    s = parse_source(source)
-    is_file = isinstance(s, str) and not s.startswith(("rtsp://", "http://", "https://", "rtmp://"))
-    if is_file and not os.path.exists(s):
-        return None                          # file KHÔNG có (trong container) → fail nhanh
-    if timeout is None:
-        timeout = 8.0 if is_file else 20.0   # RTSP/HTTP mở lâu hơn file → chờ lâu hơn
-    fs = FrameSource(source, reconnect=not is_file).start()  # file: không reconnect (fail nhanh)
+    fs = FrameSource(source, reconnect=reconnect).start()
     frame, got = None, 0
     t0 = _t.time()
     try:
@@ -58,6 +44,38 @@ def grab_snapshot(source, timeout: Optional[float] = None, warmup: int = 2):
     finally:
         fs.stop()
     return frame
+
+
+def grab_snapshot(source, timeout: Optional[float] = None, warmup: int = 2):
+    """Lấy 1 FRAME từ nguồn (để người dùng VẼ vạch/vùng lên đó). Trả ndarray BGR hoặc None.
+
+    - File LOCAL thiếu → None NGAY (khỏi chờ).
+    - RTSP → THỬ CẢ TCP LẪN UDP (không ép cứng 1 loại): Docker hay cần TCP (NAT), vài camera
+      chỉ chạy UDP → thử lần lượt, cái nào ra frame thì lấy. (User đặt sẵn env thì tôn trọng.)
+    - Stream mở chậm hơn file → timeout dài hơn (mặc định 20s).
+    """
+    s = parse_source(source)
+    is_file = isinstance(s, str) and not s.startswith(("rtsp://", "http://", "https://", "rtmp://"))
+    if is_file and not os.path.exists(s):
+        return None
+    if timeout is None:
+        timeout = 8.0 if is_file else 20.0
+
+    is_rtsp = isinstance(s, str) and s.lower().startswith("rtsp://")
+    user_env = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS")   # user tự đặt → không tự đổi
+    transports = ["tcp", "udp"] if (is_rtsp and not user_env) else [None]
+    per = timeout / len(transports)
+    try:
+        for tr in transports:
+            if tr:
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{tr}"
+            fr = _grab_once(source, reconnect=not is_file, timeout=per, warmup=warmup)
+            if fr is not None:
+                return fr
+        return None
+    finally:
+        if is_rtsp and not user_env:                            # khôi phục: đừng dính udp cho lần sau
+            os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 
 
 def encode_jpeg(frame_bgr, quality: int = 85):
@@ -91,6 +109,11 @@ class FrameSource:
     def _open(self):
         import cv2
 
+        # RTSP + chưa ai đặt transport → mặc định TCP (bền trong Docker/NAT). User/snapshot
+        # đặt env trước thì tôn trọng (không đè).
+        if (isinstance(self.source, str) and self.source.lower().startswith("rtsp://")
+                and not os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS")):
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
         cap = cv2.VideoCapture(self.source)
         try:                                  # giảm trễ RTSP: buffer nhỏ (bỏ qua nếu không hỗ trợ)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)

@@ -192,8 +192,12 @@ def _snapshot_hint(source: str) -> str:
     if s.isdigit():
         return ("Webcam (số thiết bị) KHÔNG dùng được trong Docker — nhất là trên Mac/Windows. "
                 "Hãy chạy service bằng pip (không Docker) để dùng webcam, hoặc dùng RTSP/HTTP.")
-    if s.startswith(("rtsp://", "http://", "https://", "rtmp://")):
-        return "Kiểm tra URL đúng + camera/mạng tới được TỪ TRONG container (thử URL trên trình duyệt)."
+    if s.startswith("rtsp://"):
+        return ("Đã thử CẢ TCP lẫn UDP mà không có frame. RTSP test MIỄN PHÍ (test.rtsp.stream…) "
+                "hay HẾT HẠN / giới hạn kết nối → lấy URL mới. Kiểm tra URL/credential; xác minh "
+                "stream còn sống bằng VLC hoặc `ffprobe <url>` trên máy host (ngoài Docker).")
+    if s.startswith(("http://", "https://", "rtmp://")):
+        return "Kiểm tra URL trỏ THẲNG tới video (mp4/mjpeg) + mạng tới được TỪ container."
     import os
 
     if not os.path.exists(s):
