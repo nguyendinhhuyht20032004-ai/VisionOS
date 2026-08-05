@@ -66,6 +66,13 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 > Cần chính xác cao hơn (phân biệt loại xe tốt hơn): dùng `yolov8m/x` + `imgsz 960/1280` — nhưng
 > nên có **GPU** để vẫn realtime.
 
+### ▶️ Video FILE bị TUA NHANH?
+Khi nguồn là **file** (`/data/x.mp4` hay URL .mp4), OpenCV đọc frame **nhanh hết cỡ** → video
+chạy như tua nhanh. Đã sửa: FrameSource **phát đúng FPS gốc** của file (đọc được tổng số frame
+→ ngủ cho đủ nhịp mỗi frame) nên video chạy **đúng tốc độ thật**. Camera/RTSP không bị ảnh
+hưởng (nguồn tự giới hạn tốc độ sẵn). Muốn xem **mượt hơn** thì tăng `max_fps` trên web; muốn
+**nhanh hơn cố ý** thì cũng tăng `max_fps` vượt FPS gốc. Rebuild để nhận bản vá.
+
 ## 🚑 Xe cấp cứu/xe cao bị gọi là truck/bus? & vạch sót làn ngoài
 - **Sai loại xe (ambulance/van → truck/bus):** model **COCO** (yolov8n/m/x.pt) không có lớp
   ambulance/van → xe cao bị gọi truck/bus. **Cách tốt nhất — đổi model có nhiều lớp xe:**

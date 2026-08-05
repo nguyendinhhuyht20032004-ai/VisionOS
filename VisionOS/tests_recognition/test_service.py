@@ -268,6 +268,48 @@ def test_grab_snapshot_bad_source_returns_none():
     assert grab_snapshot("/khong/ton/tai_xyz.mp4", timeout=2) is None
 
 
+def test_framesource_paces_file_to_native_fps(tmp_path):
+    """FILE → FrameSource đặt nhịp phát theo FPS gốc (chống video bị TUA NHANH)."""
+    import cv2
+
+    p = str(tmp_path / "paced.mp4")
+    vw = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"mp4v"), 10, (160, 120))
+    for _ in range(20):
+        vw.write(np.full((120, 160, 3), 50, dtype="uint8"))
+    vw.release()
+
+    fs = FrameSource(p)
+    cap = fs._open()                                    # gọi trực tiếp (không chạy thread)
+    try:
+        assert cap is not None
+        assert 0.08 <= fs._frame_interval <= 0.13      # 10 fps → ~0.1 s/frame
+    finally:
+        if cap is not None:
+            cap.release()
+
+
+def test_framesource_file_playback_is_realtime(tmp_path):
+    """Đọc FILE KHÔNG vượt tốc độ thật: sau ~0.4s chỉ đọc được vài frame (không nuốt cả file)."""
+    import time as _t
+
+    import cv2
+
+    p = str(tmp_path / "rt.mp4")
+    vw = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"mp4v"), 10, (160, 120))
+    for _ in range(50):                                # 50 frame @10fps = 5s video
+        vw.write(np.full((120, 160, 3), 90, dtype="uint8"))
+    vw.release()
+
+    fs = FrameSource(p, reconnect=False).start()
+    try:
+        _t.sleep(0.4)                                  # ~0.4s thực → ~4 frame @10fps
+        n = fs.frames_read
+    finally:
+        fs.stop()
+    # CÓ nhịp → chỉ ~4 frame trong 0.4s (không phải cả 50 như khi đọc tự do). Nới rộng chống flaky.
+    assert 1 <= n <= 30
+
+
 # --------------------------------------------------------------------------- #
 # API mới: healthz / snapshot / events (chỉ chạy nếu có fastapi)
 # --------------------------------------------------------------------------- #

@@ -70,6 +70,7 @@ class FrameSource:
         self.ok = False
         self.error: Optional[str] = None
         self.frames_read = 0
+        self._frame_interval = 0.0          # >0 với FILE → phát đúng tốc độ gốc (xem _open)
 
     def start(self) -> "FrameSource":
         self._run = True
@@ -85,9 +86,23 @@ class FrameSource:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:  # noqa: BLE001
             pass
-        return cap if cap.isOpened() else None
+        if not cap.isOpened():
+            return None
+        # FILE (đọc được TỔNG số frame) → phát ĐÚNG TỐC ĐỘ gốc theo FPS: nếu không, cv2 đọc
+        # nhanh hết cỡ nên video bị TUA NHANH. Stream trực tiếp (rtsp/webcam/mjpeg) có
+        # frame_count<=0 → để nhịp = 0 (chạy tự do, nguồn đã tự giới hạn tốc độ) — giữ hành vi cũ.
+        self._frame_interval = 0.0
+        try:
+            n = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if n and n > 0 and fps and 1.0 <= fps <= 120.0:
+                self._frame_interval = 1.0 / float(fps)
+        except Exception:  # noqa: BLE001
+            pass
+        return cap
 
     def _loop(self):
+        next_t = time.time()
         while self._run:
             if self._cap is None:
                 self._cap = self._open()
@@ -99,6 +114,7 @@ class FrameSource:
                     time.sleep(self.reconnect_delay)
                     continue
                 self.error = None
+                next_t = time.time()          # mở/replay xong → đặt lại lịch phát
             ok, fr = self._cap.read()
             if not ok:
                 self._cap.release()
@@ -113,6 +129,15 @@ class FrameSource:
             self.frames_read += 1
             with self._lock:
                 self._frame = fr
+            # FILE → ngủ cho đủ 1 nhịp frame = phát ĐÚNG tốc độ gốc. Stream trực tiếp:
+            # _frame_interval=0 → không ngủ. Lịch CỘNG DỒN (next_t += interval) tránh trôi giờ.
+            if self._frame_interval:
+                next_t += self._frame_interval
+                delay = next_t - time.time()
+                if delay > 0:
+                    time.sleep(delay)
+                elif delay < -1.0:            # tụt quá xa (giật/model chậm) → đồng bộ lại
+                    next_t = time.time()
         if self._cap is not None:
             self._cap.release()
 
