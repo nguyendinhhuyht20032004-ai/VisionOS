@@ -89,6 +89,7 @@ class Job:
         self._cur_frame = None               # frame MỚI NHẤT cho luồng detect (latest-wins)
         self._cur_lock = threading.Lock()
         self._latest_det = None              # det GẦN NHẤT từ luồng detect → luồng hiển thị vẽ
+        self._latest_det_time = 0.0          # thời điểm det đó được tính → tính "tuổi" để dự đoán box
         self._det_lock = threading.Lock()
         self._det_thread: Optional[threading.Thread] = None
 
@@ -114,6 +115,7 @@ class Job:
                 break
             with self._det_lock:
                 self._latest_det = det
+                self._latest_det_time = time.time()
             if self.req.record_events:
                 self._record_events()
 
@@ -155,9 +157,11 @@ class Job:
                         continue
                     last = now
                 # VẼ (nhẹ): dùng det gần nhất từ luồng nền → hiển thị mượt, không chờ YOLO.
+                # age = tuổi của det → engine dịch box theo vận tốc (xe nhanh box không chạy sau).
                 with self._det_lock:
                     det = self._latest_det
-                out = self.counter.render(fr, det)
+                    age = (time.time() - self._latest_det_time) if self._latest_det_time else 0.0
+                out = self.counter.render(fr, det, age)
                 ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 if ok:
                     with self._lock:

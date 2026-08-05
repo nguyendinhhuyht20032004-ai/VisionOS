@@ -101,6 +101,7 @@ class StreamingCounter:
         self.detect_every = max(1, int(detect_every))
         self._frame_i = 0
         self._track_cls: dict = {}          # track_id → {lớp: số lần} (bình chọn lớp ổn định)
+        self._track_pos: dict = {}          # track_id → (cx, cy, t) → tính VẬN TỐC để dự đoán box
         # merge_label: gộp MỌI vật về 1 nhãn (vd "vehicle") — tùy chọn khi muốn đếm gộp phương
         # tiện thành 1 loại (bỏ tick trên web = giữ phân loại car/truck/bus, mỗi loại 1 màu).
         self.merge_label = merge_label
@@ -158,6 +159,7 @@ class StreamingCounter:
                 cur = int(len(det))
                 self.result.zone_current = cur
                 self.result.zone_peak = max(self.result.zone_peak, cur)
+            self._attach_velocity(det)   # gắn vận tốc/track → luồng hiển thị DỰ ĐOÁN vị trí (bù trễ)
             self.last_det = det          # cho service crop vật → vector DB + luồng hiển thị vẽ lại
         else:
             det = self.last_det          # frame BỎ QUA detect: dùng box gần nhất
@@ -168,11 +170,12 @@ class StreamingCounter:
         self.last_frame = frame_bgr
         return det
 
-    def render(self, frame_bgr, det=None):
+    def render(self, frame_bgr, det=None, age_s: float = 0.0):
         """VẼ (phần NHẸ) — annotate ``det`` (mặc định lấy det gần nhất) lên frame. KHÔNG đếm.
 
         Dùng ở luồng hiển thị: gọi MỖI frame ở tốc độ gốc để video mượt; box lấy từ luồng
-        detect nền (trễ vài frame — không đáng kể). det=None (chưa có detect) → trả frame gốc.
+        detect nền. ``age_s`` = thời gian TỪ lúc det được tính → dịch box theo VẬN TỐC track để
+        DỰ ĐOÁN vị trí hiện tại (xe nhanh không bị box chạy sau). det=None → trả frame gốc.
         """
         import cv2
 
@@ -184,17 +187,68 @@ class StreamingCounter:
         if det is None:
             return frame_bgr             # chưa có detect nào → hiện frame gốc (vài chục ms đầu)
 
+        draw_det = self._extrapolate(det, age_s)
+
         out = None
         if self.annos is not None:
             try:
-                out = _annotate_sv(frame_bgr, det, self.annos, self.line, self.result,
+                out = _annotate_sv(frame_bgr, draw_det, self.annos, self.line, self.result,
                                    self.w, self.h, cv2, sv)
             except Exception:  # noqa: BLE001
                 out = None
         if out is None:
-            out = _draw(frame_bgr, det, self.scenario, self.line, self.zones_px, self.result,
+            out = _draw(frame_bgr, draw_det, self.scenario, self.line, self.zones_px, self.result,
                         self.w, self.h, cv2, np)
         return out
+
+    def _extrapolate(self, det, age_s: float):
+        """Trả BẢN SAO det với box đã DỊCH theo vận tốc × (age + độ trễ detect) → bù trễ luồng nền.
+
+        Giới hạn 0.25s để không vọt quá xa; vật đứng yên/đi chậm (v≈0) → gần như không dịch.
+        """
+        np = self._np
+        if not (getattr(det, "data", None) and "vx" in det.data) or len(det) == 0:
+            return det
+        a = age_s + self._last_latency_ms / 1000.0        # bù cả thời gian YOLO chạy
+        a = max(0.0, min(a, 0.25))
+        if a <= 0.0:
+            return det
+        try:
+            import copy as _copy
+            dx = det.data["vx"] * a
+            dy = det.data["vy"] * a
+            shift = np.column_stack([dx, dy, dx, dy]).astype(det.xyxy.dtype)
+            draw_det = _copy.copy(det)
+            draw_det.xyxy = det.xyxy + shift
+            return draw_det
+        except Exception:  # noqa: BLE001
+            return det
+
+    def _attach_velocity(self, det):
+        """Gắn VẬN TỐC (px/s) mỗi box theo track vào ``det.data`` → luồng hiển thị dịch box tới
+        vị trí dự đoán (bù độ trễ detect). Vật mới xuất hiện → vận tốc 0 (chưa có mốc trước)."""
+        np = self._np
+        n = len(det)
+        vx = np.zeros(n, dtype="float32")
+        vy = np.zeros(n, dtype="float32")
+        now_t = time.time()
+        if det.tracker_id is not None:
+            for i, tid in enumerate(det.tracker_id):
+                if tid is None:
+                    continue
+                tid = int(tid)
+                x1, y1, x2, y2 = (float(v) for v in det.xyxy[i])
+                cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                prev = self._track_pos.get(tid)
+                if prev is not None:
+                    pcx, pcy, pt = prev
+                    dt = now_t - pt
+                    if dt > 1e-3:
+                        vx[i] = (cx - pcx) / dt
+                        vy[i] = (cy - pcy) / dt
+                self._track_pos[tid] = (cx, cy, now_t)
+        det.data["vx"] = vx
+        det.data["vy"] = vy
 
     def process(self, frame_bgr):
         """detect + render trong 1 lượt (đồng bộ) — cho test/notebook và nguồn không cần tách luồng."""

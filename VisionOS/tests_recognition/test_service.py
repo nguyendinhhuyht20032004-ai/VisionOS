@@ -103,6 +103,34 @@ def test_process_still_equals_detect_plus_render():
     assert out is not None and out.shape == (180, 320, 3)
 
 
+def test_render_extrapolates_fast_box_forward():
+    # Bù trễ luồng nền: box được DỊCH theo vận tốc × tuổi → xe nhanh không bị box chạy sau.
+    sc, _ = make_scenario("object", "fullscreen", resolution=(320, 180))
+    c = StreamingCounter(sc, _FakeDet(3), resolution=(320, 180))
+    det = c.detect(np.zeros((180, 320, 3), dtype="uint8"))
+    assert len(det) >= 1 and "vx" in det.data
+    det.data["vx"] = np.full(len(det), 100.0, dtype="float32")   # 100 px/s sang phải
+    det.data["vy"] = np.zeros(len(det), dtype="float32")
+    c._last_latency_ms = 0.0
+    x0 = float(det.xyxy[0][0])
+    draw = c._extrapolate(det, age_s=0.1)                        # 100*0.1 = +10 px
+    assert float(draw.xyxy[0][0]) > x0                           # box dịch TỚI TRƯỚC (bù trễ)
+    assert float(det.xyxy[0][0]) == x0                           # det gốc KHÔNG bị đổi (chỉ bản sao)
+
+
+def test_extrapolate_ignores_slow_object():
+    # Vật đứng yên/đi chậm (v≈0) → box gần như KHÔNG dịch (không bù thừa).
+    sc, _ = make_scenario("object", "fullscreen", resolution=(320, 180))
+    c = StreamingCounter(sc, _FakeDet(3), resolution=(320, 180))
+    det = c.detect(np.zeros((180, 320, 3), dtype="uint8"))
+    det.data["vx"] = np.zeros(len(det), dtype="float32")
+    det.data["vy"] = np.zeros(len(det), dtype="float32")
+    c._last_latency_ms = 0.0
+    x0 = float(det.xyxy[0][0])
+    draw = c._extrapolate(det, age_s=0.1)
+    assert float(draw.xyxy[0][0]) == x0                          # không dịch
+
+
 def test_streaming_counter_counts_crossing_and_annotates():
     n = 14
     sc, _ = make_scenario("object", "line", line=[0, 50, 100, 50], resolution=(320, 180))
