@@ -51,10 +51,8 @@ def test_wanted_classes_from_prompt():
     det = UltralyticsYoloDetector()
     assert det._wanted_classes("person") == {"person"}
     assert det._wanted_classes("đếm ô tô") == {"car"}
-    # "xe" chung → gồm nhiều loại phương tiện (COCO + Open Images V7: van/taxi/ambulance)
-    veh = det._wanted_classes("đếm xe qua trạm")
-    assert {"car", "motorcycle", "truck", "bus"} <= veh
-    assert {"van", "taxi", "ambulance"} <= veh
+    # "xe" chung → gồm nhiều loại phương tiện (COCO: car/motorcycle/truck/bus)
+    assert det._wanted_classes("đếm xe qua trạm") == {"car", "motorcycle", "truck", "bus"}
 
 
 def test_explicit_want_overrides_prompt():

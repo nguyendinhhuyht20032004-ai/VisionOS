@@ -56,7 +56,7 @@ class JobRequest(BaseModel):
     confidence: float = 0.25
     detect_every: int = 1                         # chạy YOLO mỗi N frame (>1 = nhanh hơn trên CPU)
     group_label: bool = False                     # True = gộp mọi loại xe → 1 nhãn "vehicle";
-                                                  # False (mặc định) = GIỮ phân loại car/truck/bus/van/ambulance…
+                                                  # False (mặc định) = GIỮ phân loại car/truck/bus (mỗi loại 1 màu)
     in_label: str = "IN"
     out_label: str = "OUT"
     anchor: Optional[str] = None
@@ -328,9 +328,9 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
   <input id="source" placeholder='rtsp://... hoặc /data/video.mp4 hoặc 0'>
   <button class="alt" onclick="snap()">📷 Lấy frame để vẽ</button>
   <label>Đối tượng</label>
-  <select id="prompt"><option value="person">person (người)</option><option value="vehicle">vehicle (mọi xe)</option><option value="car">car</option><option value="truck">truck</option><option value="bus">bus</option><option value="ambulance">ambulance (cần model OIV7)</option><option value="van">van (cần model OIV7)</option></select>
+  <select id="prompt"><option value="person">person (người)</option><option value="vehicle">vehicle (mọi xe)</option><option value="car">car</option><option value="truck">truck</option><option value="bus">bus</option></select>
   <label style="display:flex;align-items:center;gap:6px;margin-top:8px;color:#e2e8f0">
-   <input type="checkbox" id="grp" style="width:auto"> Gộp mọi loại xe thành “vehicle” (bỏ tick = giữ car/truck/bus/van/ambulance)
+   <input type="checkbox" id="grp" style="width:auto"> Gộp mọi loại xe thành “vehicle” (bỏ tick = giữ car/truck/bus mỗi loại 1 màu)
   </label>
   <label>Kiểu đếm — rồi VẼ lên khung bên phải</label>
   <select id="ctype" onchange="resetDraw()">

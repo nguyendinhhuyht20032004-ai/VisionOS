@@ -178,7 +178,4 @@ def test_vehicles_prompt_is_multiclass_vehicle():
 
 def test_vehicle_alias_maps_to_all_vehicle_classes():
     from recognition.detectors.yolo_nas import COCO_ALIASES
-    veh = set(COCO_ALIASES["vehicle"])
-    assert {"car", "motorcycle", "truck", "bus"} <= veh          # lớp COCO
-    assert {"van", "taxi", "ambulance"} <= veh                    # lớp Open Images V7 (model oiv7)
-    assert COCO_ALIASES["xe cấp cứu"] == ["ambulance"]            # tiếng Việt → ambulance
+    assert set(COCO_ALIASES["vehicle"]) == {"car", "motorcycle", "truck", "bus"}   # lớp xe COCO

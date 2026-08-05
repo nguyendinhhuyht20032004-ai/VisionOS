@@ -149,7 +149,7 @@ class _MultiClassDet:
 
 
 def test_merge_label_groups_all_vehicle_types():
-    # đếm gộp phương tiện: car/truck (xe cao bị nhầm) → 1 nhãn "vehicle" (COCO không có ambulance)
+    # đếm GỘP phương tiện (tùy chọn): car/truck → 1 nhãn "vehicle" (khi không cần tách loại)
     sc, _ = make_scenario("vehicle", "fullscreen", resolution=(320, 180))
     c = StreamingCounter(sc, _MultiClassDet(), resolution=(320, 180), merge_label="vehicle")
     for _ in range(4):

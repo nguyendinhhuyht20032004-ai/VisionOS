@@ -84,18 +84,14 @@ Model quá nặng so với CPU thì video **chạy hơi chậm hơn thực nhưn
 giật) → muốn đúng realtime hơn thì dùng `yolov8n` + `imgsz 640`, tăng `detect_every`, hoặc GPU.
 Rebuild để nhận bản vá.
 
-## 🚑 Xe cấp cứu/xe cao bị gọi là truck/bus? & vạch sót làn ngoài
-- **Sai loại xe (ambulance/van → truck/bus):** model **COCO** (yolov8n/m/x.pt) không có lớp
-  ambulance/van → xe cao bị gọi truck/bus. **Cách tốt nhất — đổi model có nhiều lớp xe:**
-  dùng **Open Images V7** (`YOLO_WEIGHTS=yolov8x-oiv7.pt`, ultralytics tự tải) → nhận **Car,
-  Truck, Bus, Van, Taxi, Ambulance, Motorcycle** RIÊNG. Đặt trong `docker-compose.yml`:
-  ```yaml
-  environment:
-    - YOLO_WEIGHTS=yolov8x-oiv7.pt   # (CPU chậm → yolov8m-oiv7.pt / yolov8s-oiv7.pt)
-  ```
-  Prompt `vehicle` đã tự bao gồm van/taxi/ambulance; hoặc đếm riêng `prompt="ambulance"`.
-  **Mặc định GIỮ phân loại** (car/truck/bus/van/ambulance, mỗi loại 1 màu). Muốn gộp hết
-  thành "vehicle": tick ô trên web hoặc gửi `"group_label": true`.
+## 🚗 Phân loại xe (car/truck/bus) & vạch sót làn ngoài
+- **Phân loại LOẠI XE:** service dùng **YOLO COCO**, phân biệt **car / truck / bus** (+ motorcycle),
+  mỗi loại **một màu** riêng. **Mặc định GIỮ phân loại** (không gộp). Muốn gộp tất cả về 1 nhãn
+  "vehicle" (1 màu) thì **tick ô** trên web hoặc gửi `"group_label": true`.
+- **Xe cao (cứu thương/thùng cao) đôi khi bị gọi truck/bus:** đây là giới hạn của COCO (chỉ có
+  car/truck/bus/motorcycle, không có lớp riêng cho các xe đó) — chấp nhận, hoặc **gộp** về
+  "vehicle" cho gọn nếu không cần tách loại. *(Đã ổn định nhãn theo track nên không còn nhấp
+  nháy car↔truck.)*
 - **Vạch chỉ đếm làn trong, sót làn ngoài:** (1) **vẽ vạch phủ HẾT các làn** (kéo dài qua cả làn
   ngoài); (2) đã sửa `LineZone` đếm theo **1 điểm neo (tâm)** thay vì cả 4 góc → xe TO ở làn ngoài
   (gần camera) cũng đếm được. Rebuild lại để nhận bản vá.

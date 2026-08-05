@@ -101,8 +101,8 @@ class StreamingCounter:
         self.detect_every = max(1, int(detect_every))
         self._frame_i = 0
         self._track_cls: dict = {}          # track_id → {lớp: số lần} (bình chọn lớp ổn định)
-        # merge_label: gộp MỌI vật về 1 nhãn (vd "vehicle") — dùng khi đếm gộp phương tiện
-        # (COCO không có lớp ambulance/van → xe cao bị gọi nhầm truck/bus; gộp lại cho gọn).
+        # merge_label: gộp MỌI vật về 1 nhãn (vd "vehicle") — tùy chọn khi muốn đếm gộp phương
+        # tiện thành 1 loại (bỏ tick trên web = giữ phân loại car/truck/bus, mỗi loại 1 màu).
         self.merge_label = merge_label
 
     # ------------------------------------------------------------------ #
