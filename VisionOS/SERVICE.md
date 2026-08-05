@@ -72,6 +72,10 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 Service chạy **ĐỒNG BỘ**: mỗi frame hiện ra là **detect đúng frame đó rồi vẽ ngay** → box vẽ đúng
 frame (không lệch). Hai thứ hay làm box "chạy sau" / video giật đã chỉnh:
 
+- **Video CÁI CHẬM CÁI NHANH (mỗi video 1 tốc độ)** → do trước đây pace theo **FPS ghi trong
+  metadata** (`CAP_PROP_FPS`) — hay **sai/thiếu** tuỳ video. Đã sửa: pace theo **TIMELINE THẬT**
+  của từng frame (`POS_MSEC`) khớp đồng hồ → **mọi video chạy ĐÚNG tốc độ thật**, không phụ thuộc
+  metadata (fallback theo FPS chỉ khi không đọc được POS_MSEC).
 - **Box trễ so với vật** → do **DetectionsSmoother** lấy trung bình vị trí qua nhiều frame (làm mượt
   box nhưng khiến box **trễ**, vật nhanh càng lệch). Đã hạ mặc định **8 → 2** frame → box **bám sát**
   hơn hẳn. Chỉnh qua env `SMOOTHER_LEN` (`1` = tắt hẳn, bám sát nhất; số lớn = mượt box nhưng trễ).

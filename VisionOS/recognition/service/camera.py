@@ -70,7 +70,8 @@ class FrameSource:
         self.ok = False
         self.error: Optional[str] = None
         self.frames_read = 0
-        self._frame_interval = 0.0          # >0 với FILE → phát đúng tốc độ gốc (xem _open)
+        self._is_file = False               # True = file (pace theo timeline thật, xem _loop)
+        self._frame_interval = 0.0          # 1/fps — fallback pace khi POS_MSEC không có
 
     def start(self) -> "FrameSource":
         self._run = True
@@ -88,21 +89,28 @@ class FrameSource:
             pass
         if not cap.isOpened():
             return None
-        # FILE (đọc được TỔNG số frame) → phát ĐÚNG TỐC ĐỘ gốc theo FPS: nếu không, cv2 đọc
-        # nhanh hết cỡ nên video bị TUA NHANH. Stream trực tiếp (rtsp/webcam/mjpeg) có
-        # frame_count<=0 → để nhịp = 0 (chạy tự do, nguồn đã tự giới hạn tốc độ) — giữ hành vi cũ.
+        # FILE (đọc được TỔNG số frame) → phát theo TIMELINE THẬT (POS_MSEC) trong _loop, để MỌI
+        # video đúng tốc độ (không phụ thuộc metadata FPS hay sai). Stream trực tiếp (rtsp/webcam/
+        # mjpeg) có frame_count<=0 → chạy tự do (nguồn tự giới hạn tốc độ).
+        self._is_file = False
         self._frame_interval = 0.0
         try:
             n = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             fps = cap.get(cv2.CAP_PROP_FPS)
-            if n and n > 0 and fps and 1.0 <= fps <= 120.0:
-                self._frame_interval = 1.0 / float(fps)
+            if n and n > 0:
+                self._is_file = True
+                if fps and 1.0 <= fps <= 120.0:
+                    self._frame_interval = 1.0 / float(fps)   # fallback khi POS_MSEC không có
         except Exception:  # noqa: BLE001
             pass
         return cap
 
     def _loop(self):
-        next_t = time.time()
+        import cv2
+
+        start_wall = None                    # mốc đồng hồ khi bắt đầu phát (đặt ở frame đầu)
+        base_msec = 0.0                      # POS_MSEC của frame đầu
+        idx = 0
         while self._run:
             if self._cap is None:
                 self._cap = self._open()
@@ -114,7 +122,8 @@ class FrameSource:
                     time.sleep(self.reconnect_delay)
                     continue
                 self.error = None
-                next_t = time.time()          # mở/replay xong → đặt lại lịch phát
+                start_wall = None            # mở/replay xong → đặt lại mốc thời gian
+                idx = 0
             ok, fr = self._cap.read()
             if not ok:
                 self._cap.release()
@@ -127,17 +136,26 @@ class FrameSource:
                 continue
             self.ok = True
             self.frames_read += 1
+            idx += 1
             with self._lock:
                 self._frame = fr
-            # FILE → ngủ cho đủ 1 nhịp frame = phát ĐÚNG tốc độ gốc. Stream trực tiếp:
-            # _frame_interval=0 → không ngủ. Lịch CỘNG DỒN (next_t += interval) tránh trôi giờ.
-            if self._frame_interval:
-                next_t += self._frame_interval
-                delay = next_t - time.time()
-                if delay > 0:
-                    time.sleep(delay)
-                elif delay < -1.0:            # tụt quá xa (giật/model chậm) → đồng bộ lại
-                    next_t = time.time()
+            # FILE → phát ĐÚNG TỐC ĐỘ THẬT: khớp đồng hồ với TIMELINE video (POS_MSEC = mốc thời
+            # gian thật của frame). KHÔNG phụ thuộc metadata FPS (hay sai/thiếu → video lúc nhanh
+            # lúc chậm). POS_MSEC không có → fallback đếm frame × interval (theo FPS). Stream
+            # trực tiếp: _is_file=False → chạy tự do.
+            if self._is_file:
+                if start_wall is None:
+                    start_wall = time.time()
+                    base_msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0
+                msec = self._cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0
+                vid_t = (msec - base_msec) / 1000.0
+                if vid_t <= 0.0 and self._frame_interval:
+                    vid_t = idx * self._frame_interval
+                wall_t = time.time() - start_wall
+                if vid_t - wall_t > 0.0:
+                    time.sleep(min(vid_t - wall_t, 1.0))      # đi trước lịch → chờ (cap 1s an toàn)
+                elif wall_t - vid_t > 2.0:
+                    start_wall = time.time() - vid_t          # tụt quá xa → đặt lại mốc (khỏi tua bù)
         if self._cap is not None:
             self._cap.release()
 
