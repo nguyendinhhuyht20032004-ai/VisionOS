@@ -68,19 +68,22 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 > Cần chính xác cao hơn (phân biệt loại xe tốt hơn): dùng `yolov8m/x` + `imgsz 960/1280` — nhưng
 > nên có **GPU** để vẫn realtime.
 
-### ▶️ Box phải ÔM SÁT vật (không trễ) — tốc độ phát
-Service chạy **ĐỒNG BỘ**: mỗi frame hiện ra là **detect đúng frame đó rồi vẽ ngay** → **box luôn
-ôm sát vật** (không trễ, không lệch). Đây là ưu tiên **độ chính xác của box**.
+### ▶️ Box ÔM SÁT vật + video mượt hơn
+Service chạy **ĐỒNG BỘ**: mỗi frame hiện ra là **detect đúng frame đó rồi vẽ ngay** → box vẽ đúng
+frame (không lệch). Hai thứ hay làm box "chạy sau" / video giật đã chỉnh:
 
-- File đọc **đúng FPS gốc** (đã pace, không tua nhanh); lấy **frame mới nhất** nên **không bị chậm
-  lại** — CPU không kịp thì tự **bỏ bớt frame** để bám thời gian thực (số fps hiển thị = tốc độ
-  YOLO trên máy, ví dụ ~8–12 fps với `yolov8n@640`).
-- Muốn **nhiều fps hơn** (mượt hơn): tăng `max_fps`, hoặc dùng model nhẹ hơn / ảnh nhỏ hơn.
-  Muốn vừa **mượt cao vừa ôm sát**: cần **GPU** (YOLO nhanh → chạy kịp gần từng frame).
+- **Box trễ so với vật** → do **DetectionsSmoother** lấy trung bình vị trí qua nhiều frame (làm mượt
+  box nhưng khiến box **trễ**, vật nhanh càng lệch). Đã hạ mặc định **8 → 2** frame → box **bám sát**
+  hơn hẳn. Chỉnh qua env `SMOOTHER_LEN` (`1` = tắt hẳn, bám sát nhất; số lớn = mượt box nhưng trễ).
+- **Video giật (ít fps)** → YOLO đồng bộ trên CPU giới hạn số fps. Đã nâng `max_fps` mặc định **8 → 12**
+  (bỏ trần thấp). Số fps thực = tốc độ YOLO trên máy (vd ~8–12 fps với `yolov8n@640`).
 
-> Ghi chú: bản trước từng cho YOLO chạy luồng nền + *dự đoán* vị trí box để video mượt hơn, nhưng
-> box hay **lệch/không ôm sát** khi vật nhanh. Đã bỏ cách đó, quay lại đồng bộ cho **box chuẩn**.
-> Rebuild để nhận bản vá.
+**Muốn MƯỢT hơn nữa trên CPU** (đổi lại độ chính xác giảm chút): giảm `YOLO_IMGSZ` (640 → 512/480)
+trong `docker-compose.yml` → YOLO nhanh gấp ~1.5–2× → nhiều fps hơn. Vừa **mượt cao vừa ôm sát**
+thì cần **GPU**. Rebuild để nhận bản vá.
+
+> Ghi chú: bản trước từng cho YOLO chạy luồng nền + *dự đoán* vị trí box để video mượt, nhưng box hay
+> **lệch/không ôm sát** khi vật nhanh → đã bỏ, quay lại đồng bộ cho **box chuẩn**.
 
 ## 🚗 Phân loại xe (car/truck/bus) & vạch sót làn ngoài
 - **Phân loại LOẠI XE:** service dùng **YOLO COCO**, phân biệt **car / truck / bus** (+ motorcycle),

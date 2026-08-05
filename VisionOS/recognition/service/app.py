@@ -52,7 +52,7 @@ class JobRequest(BaseModel):
     zone: Optional[List[List[float]]] = None     # [[x,y],…] % (người dùng vẽ)
     model: str = "yolo"                          # người/xe → YOLO
     resolution: List[int] = [960, 540]
-    max_fps: float = 8.0
+    max_fps: float = 12.0                         # trần fps hiển thị (thực tế bị giới hạn bởi tốc độ YOLO)
     confidence: float = 0.25
     detect_every: int = 1                         # chạy YOLO mỗi N frame (>1 = nhanh hơn trên CPU)
     group_label: bool = False                     # True = gộp mọi loại xe → 1 nhãn "vehicle";
@@ -97,9 +97,12 @@ class Job:
         try:
             self.status = "đang nạp model (" + self.kind + ")"
             detector = get_detector(self.kind, self.req.confidence)
+            # smoother_len NHỎ (2) → box BÁM SÁT vật (length lớn = trung bình nhiều frame → box
+            # trễ, "chạy sau" vật nhanh). Chỉnh qua env SMOOTHER_LEN (1 = tắt, bám sát nhất).
             self.counter = StreamingCounter(self.scenario, detector,
                                             resolution=self.scenario.resolution,
                                             detect_every=self.req.detect_every,
+                                            smoother_len=int(os.environ.get("SMOOTHER_LEN", "2")),
                                             merge_label=self.merge_label)
             self.status = "đang kết nối camera"
             self.fs = FrameSource(self.source).start()
@@ -336,7 +339,7 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
     <option value="zone">Trong VÙNG (vẽ đa giác)</option>
     <option value="fullscreen">Toàn màn hình (không cần vẽ)</option>
   </select>
-  <label>max_fps</label><input id="fps" value="8">
+  <label>max_fps (cao hơn = mượt hơn nếu CPU kịp)</label><input id="fps" value="12">
   <label>Detect mỗi N frame (1 = mượt/đều nhất; tăng = nhanh hơn nhưng có thể giật hơn)</label><input id="dev" value="1">
   <button onclick="startJob()">▶ Bắt đầu đếm</button>
   <button class="stop" onclick="stopJob()">■ Dừng</button>
@@ -386,7 +389,7 @@ function resetDraw(){ctype=document.getElementById('ctype').value;pts=[];documen
 function startJob(){
  const s=document.getElementById('source').value; if(!s){msg('Nhập nguồn',1);return;}
  let body={source:s,prompt:document.getElementById('prompt').value,counting_type:ctype,
-   model:'yolo',max_fps:parseFloat(document.getElementById('fps').value)||8,
+   model:'yolo',max_fps:parseFloat(document.getElementById('fps').value)||12,
    detect_every:parseInt(document.getElementById('dev').value)||1,
    group_label:document.getElementById('grp').checked};
  if(ctype==='line'){ if(pts.length!==2){msg('Hãy VẼ 2 điểm cho vạch.',1);return;} body.line=[pts[0][0],pts[0][1],pts[1][0],pts[1][1]]; }
