@@ -11,9 +11,10 @@ services:
       - "8000:8000"
     environment:
       - QDRANT_URL=http://qdrant:6333
-      - YOLO_WEIGHTS=yolov8x.pt   # yolov8m.pt cho nhanh; yolov8x cho recall cao
-      - YOLO_IMGSZ=1280
-      - YOLO_CONF=0.15
+      # MẶC ĐỊNH CPU-friendly (chạy local không GPU). GPU → yolov8x.pt + YOLO_IMGSZ=1280 (recall cao hơn).
+      - YOLO_WEIGHTS=yolov8m.pt   # CPU: yolov8n.pt nhanh nhất · yolov8m.pt cân bằng · yolov8x.pt cần GPU
+      - YOLO_IMGSZ=960
+      - YOLO_CONF=0.2
     depends_on:
       - qdrant
     restart: unless-stopped

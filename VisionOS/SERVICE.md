@@ -12,6 +12,25 @@ docker compose up --build          # dựng api (FastAPI) + qdrant (vector DB)
 bash scripts/docker_smoke.sh       # kiểm thử nhanh: build→healthz→tạo job→đọc số đếm
 ```
 
+## 💻 Chạy trên CPU (máy local, KHÔNG cần GPU)
+**Chạy được** — YOLO/supervision/FastAPI/Qdrant đều chạy CPU; Docker mặc định là bản **CPU**
+(`TORCH_CUDA=cpu`), compose đặt sẵn model nhẹ `yolov8m.pt` + `imgsz=960`. Chỉ **chậm hơn** GPU.
+
+Mẹo cho CPU nhanh hơn (đặt trong `docker-compose.yml` hoặc export env):
+```bash
+YOLO_WEIGHTS=yolov8n.pt   # nhẹ & nhanh nhất (yolov8m = cân bằng, yolov8x = cần GPU)
+YOLO_IMGSZ=640            # ảnh nhỏ → nhanh hơn (960/1280 chậm trên CPU)
+# max_fps thấp (2–4) khi tạo job để đỡ nghẽn CPU
+```
+
+**Không cần Docker** (chạy thẳng, pip cài torch bản CPU mặc định):
+```bash
+pip install -r requirements-service.txt          # torch CPU + ultralytics + supervision + fastapi…
+python run_service.py --host 0.0.0.0 --port 8000 # mở http://localhost:8000
+# (Vector DB tự chạy in-memory nếu không có Qdrant — vẫn đếm + tìm kiếm bình thường.)
+```
+Tốc độ tham khảo trên CPU: yolov8n@640 ~ vài–chục fps · yolov8m@960 ~ 1–5 fps · yolov8x@1280 rất chậm.
+
 ## ✏️ Vẽ vạch/vùng rồi ĐẾM (trên trang web)
 Mở `http://localhost:8000` → nhập nguồn → **📷 Lấy frame** → chọn kiểu đếm → **VẼ** trực tiếp
 lên khung (vạch = 2 điểm, vùng = đa giác) → **▶ Bắt đầu đếm**. Toạ độ lưu theo **%** nên khớp
