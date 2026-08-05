@@ -18,18 +18,24 @@ from ..base import BoundingBox, Detection, DetectorResult
 
 __all__ = ["YoloNasDetector", "COCO_ALIASES"]
 
-# Ánh xạ prompt tiếng Việt/thông dụng → lớp COCO mà YOLO-NAS nhận diện.
+# Tập LỚP XE cho prompt nhóm "vehicle". Gồm cả lớp COCO (car/motorcycle/truck/bus) LẪN lớp
+# Open Images V7 (van/taxi/ambulance/limousine) — model COCO không có mấy lớp sau nên chỉ khớp
+# khi dùng model OIV7 (yolov8*-oiv7.pt); với COCO thì tự bỏ qua (vô hại). Nhờ vậy đổi sang OIV7
+# là PHÂN BIỆT được xe cấp cứu / van / taxi mà không cần sửa alias.
+_VEHICLE = ["car", "motorcycle", "truck", "bus", "van", "taxi", "ambulance", "limousine"]
+
+# Ánh xạ prompt tiếng Việt/thông dụng → lớp model nhận diện (COCO + Open Images V7).
 COCO_ALIASES = {
     "person": ["person"],
     "người": ["person"],
     "car": ["car"],
     "ô tô": ["car"],
     "oto": ["car"],
-    # "vehicle"/"phương tiện"/"xe" → MỌI loại xe (bắt cả tải/buýt/máy, không chỉ ô tô)
-    "vehicle": ["car", "motorcycle", "truck", "bus"],
-    "phương tiện": ["car", "motorcycle", "truck", "bus"],
-    "phuong tien": ["car", "motorcycle", "truck", "bus"],
-    "xe": ["car", "motorcycle", "truck", "bus"],
+    # "vehicle"/"phương tiện"/"xe" → MỌI loại xe
+    "vehicle": _VEHICLE,
+    "phương tiện": _VEHICLE,
+    "phuong tien": _VEHICLE,
+    "xe": _VEHICLE,
     "xe máy": ["motorcycle"],
     "motorcycle": ["motorcycle"],
     "truck": ["truck"],
@@ -37,6 +43,12 @@ COCO_ALIASES = {
     "tải": ["truck"],
     "bus": ["bus"],
     "xe buýt": ["bus"],
+    # Lớp CHỈ có ở Open Images V7 (cần yolov8*-oiv7.pt)
+    "van": ["van"],
+    "taxi": ["taxi"],
+    "ambulance": ["ambulance"],
+    "xe cấp cứu": ["ambulance"],
+    "xe cứu thương": ["ambulance"],
 }
 
 

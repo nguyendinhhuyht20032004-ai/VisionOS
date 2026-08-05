@@ -57,12 +57,17 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 > nên có **GPU** để vẫn realtime.
 
 ## 🚑 Xe cấp cứu/xe cao bị gọi là truck/bus? & vạch sót làn ngoài
-- **Sai loại xe (ambulance/van → truck/bus):** YOLO/COCO **không có** lớp ambulance/van, nên xe
-  cao bị map sang truck/bus gần nhất — đây là giới hạn của model, không sửa bằng chỉnh tham số.
-  Cách xử lý: đếm **gộp phương tiện** — đặt `prompt="vehicle"` (mặc định service **gộp mọi loại
-  xe thành 1 nhãn "vehicle"**, một màu → hết cảnh "sai loại"). Muốn phân biệt loại xe THẬT
-  (kể cả ambulance) → cần **model huấn luyện riêng** (nạp qua `YOLO_WEIGHTS=hf://…` + `YOLO_CLASSES`).
-  Muốn giữ nhãn car/truck/bus: gửi `"group_label": false` trong POST /api/jobs.
+- **Sai loại xe (ambulance/van → truck/bus):** model **COCO** (yolov8n/m/x.pt) không có lớp
+  ambulance/van → xe cao bị gọi truck/bus. **Cách tốt nhất — đổi model có nhiều lớp xe:**
+  dùng **Open Images V7** (`YOLO_WEIGHTS=yolov8x-oiv7.pt`, ultralytics tự tải) → nhận **Car,
+  Truck, Bus, Van, Taxi, Ambulance, Motorcycle** RIÊNG. Đặt trong `docker-compose.yml`:
+  ```yaml
+  environment:
+    - YOLO_WEIGHTS=yolov8x-oiv7.pt   # (CPU chậm → yolov8m-oiv7.pt / yolov8s-oiv7.pt)
+  ```
+  Prompt `vehicle` đã tự bao gồm van/taxi/ambulance; hoặc đếm riêng `prompt="ambulance"`.
+  **Mặc định GIỮ phân loại** (car/truck/bus/van/ambulance, mỗi loại 1 màu). Muốn gộp hết
+  thành "vehicle": tick ô trên web hoặc gửi `"group_label": true`.
 - **Vạch chỉ đếm làn trong, sót làn ngoài:** (1) **vẽ vạch phủ HẾT các làn** (kéo dài qua cả làn
   ngoài); (2) đã sửa `LineZone` đếm theo **1 điểm neo (tâm)** thay vì cả 4 góc → xe TO ở làn ngoài
   (gần camera) cũng đếm được. Rebuild lại để nhận bản vá.

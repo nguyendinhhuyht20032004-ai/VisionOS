@@ -12,9 +12,10 @@ services:
     environment:
       - QDRANT_URL=http://qdrant:6333
       # MẶC ĐỊNH REALTIME trên CPU (local, không GPU). GPU → yolov8x.pt + YOLO_IMGSZ=1280 (recall cao hơn).
-      - YOLO_WEIGHTS=yolov8n.pt   # nhẹ nhất → realtime CPU (m/x chính xác hơn nhưng chậm, cần GPU)
+      - YOLO_WEIGHTS=yolov8n.pt   # nhẹ → realtime CPU. PHÂN BIỆT LOẠI XE (ambulance/van/taxi):
+                                  #   dùng yolov8x-oiv7.pt (Open Images V7) — nhiều lớp xe hơn COCO.
       - YOLO_IMGSZ=640            # ảnh nhỏ → nhanh (1280 cần GPU)
-      - YOLO_CONF=0.3             # ngưỡng cao hơn → ít box mờ/nhầm car↔truck
+      - YOLO_CONF=0.3             # ngưỡng cao hơn → ít box mờ/nhầm loại
     depends_on:
       - qdrant
     restart: unless-stopped

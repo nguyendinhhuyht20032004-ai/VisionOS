@@ -55,7 +55,8 @@ class JobRequest(BaseModel):
     max_fps: float = 8.0
     confidence: float = 0.25
     detect_every: int = 1                         # chạy YOLO mỗi N frame (>1 = nhanh hơn trên CPU)
-    group_label: bool = True                      # gộp mọi loại xe → 1 nhãn "vehicle" (COCO nhầm xe cao)
+    group_label: bool = False                     # True = gộp mọi loại xe → 1 nhãn "vehicle";
+                                                  # False (mặc định) = GIỮ phân loại car/truck/bus/van/ambulance…
     in_label: str = "IN"
     out_label: str = "OUT"
     anchor: Optional[str] = None
@@ -323,7 +324,10 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
   <input id="source" placeholder='rtsp://... hoặc /data/video.mp4 hoặc 0'>
   <button class="alt" onclick="snap()">📷 Lấy frame để vẽ</button>
   <label>Đối tượng</label>
-  <select id="prompt"><option value="person">person (người)</option><option value="vehicle">vehicle (mọi xe)</option><option value="car">car</option><option value="truck">truck</option><option value="bus">bus</option></select>
+  <select id="prompt"><option value="person">person (người)</option><option value="vehicle">vehicle (mọi xe)</option><option value="car">car</option><option value="truck">truck</option><option value="bus">bus</option><option value="ambulance">ambulance (cần model OIV7)</option><option value="van">van (cần model OIV7)</option></select>
+  <label style="display:flex;align-items:center;gap:6px;margin-top:8px;color:#e2e8f0">
+   <input type="checkbox" id="grp" style="width:auto"> Gộp mọi loại xe thành “vehicle” (bỏ tick = giữ car/truck/bus/van/ambulance)
+  </label>
   <label>Kiểu đếm — rồi VẼ lên khung bên phải</label>
   <select id="ctype" onchange="resetDraw()">
     <option value="line">Cắt VẠCH (vẽ 2 điểm)</option>
@@ -381,7 +385,8 @@ function startJob(){
  const s=document.getElementById('source').value; if(!s){msg('Nhập nguồn',1);return;}
  let body={source:s,prompt:document.getElementById('prompt').value,counting_type:ctype,
    model:'yolo',max_fps:parseFloat(document.getElementById('fps').value)||8,
-   detect_every:parseInt(document.getElementById('dev').value)||1};
+   detect_every:parseInt(document.getElementById('dev').value)||1,
+   group_label:document.getElementById('grp').checked};
  if(ctype==='line'){ if(pts.length!==2){msg('Hãy VẼ 2 điểm cho vạch.',1);return;} body.line=[pts[0][0],pts[0][1],pts[1][0],pts[1][1]]; }
  else if(ctype==='zone'){ if(pts.length<3){msg('Vẽ ≥3 điểm cho vùng.',1);return;} body.zone=pts; }
  msg('Đang tạo job…');
