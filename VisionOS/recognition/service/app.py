@@ -112,13 +112,17 @@ class Job:
                     if self.fs.error and not self.fs.alive:
                         self.error = self.fs.error
                         break
-                    time.sleep(0.05)
+                    time.sleep(0.02)
                     continue
-                now = time.time()
-                if interval and now - last < interval:
-                    time.sleep(min(0.02, interval - (now - last)))
-                    continue
-                last = now
+                # LIVE (camera/RTSP, giữ frame mới nhất) → throttle theo max_fps: realtime + đỡ tải.
+                # FILE (đọc đúng thứ tự) → reader đã phát đúng FPS gốc, xử lý MỌI frame theo thứ tự
+                # → mượt + đếm chính xác; KHÔNG throttle nữa (detect_every lo phần tải YOLO).
+                if self.fs.drop_frames:
+                    now = time.time()
+                    if interval and now - last < interval:
+                        time.sleep(min(0.02, interval - (now - last)))
+                        continue
+                    last = now
                 out = self.counter.process(fr)
                 if self.req.record_events:
                     self._record_events()
@@ -261,7 +265,7 @@ def job_mjpeg(job_id: str):
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + f + b"\r\n")
             if not job.running and job.frame() is None:
                 break
-            time.sleep(0.06)
+            time.sleep(0.04)                     # ~25 fps: đủ mượt cho video phát đúng FPS gốc
 
     return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
 
@@ -335,7 +339,7 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
     <option value="fullscreen">Toàn màn hình (không cần vẽ)</option>
   </select>
   <label>max_fps</label><input id="fps" value="8">
-  <label>Detect mỗi N frame (CPU chậm → để 2–3 cho mượt hơn)</label><input id="dev" value="1">
+  <label>Detect mỗi N frame (CPU chậm → để 2–3 cho mượt hơn)</label><input id="dev" value="2">
   <button onclick="startJob()">▶ Bắt đầu đếm</button>
   <button class="stop" onclick="stopJob()">■ Dừng</button>
   <button class="warn" onclick="resetDraw()">↺ Vẽ lại</button>

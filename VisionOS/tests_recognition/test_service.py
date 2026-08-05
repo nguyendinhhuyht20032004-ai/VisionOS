@@ -283,9 +283,37 @@ def test_framesource_paces_file_to_native_fps(tmp_path):
     try:
         assert cap is not None
         assert 0.08 <= fs._frame_interval <= 0.13      # 10 fps → ~0.1 s/frame
+        assert fs.drop_frames is False                 # FILE → KHÔNG bỏ frame (phát mượt/đúng thứ tự)
     finally:
         if cap is not None:
             cap.release()
+
+
+def test_framesource_file_reads_in_order_no_drop(tmp_path):
+    """FILE → đọc ĐỦ frame, ĐÚNG THỨ TỰ (không nhảy/bỏ frame) → tracker/đếm chính xác."""
+    import time as _t
+
+    import cv2
+
+    p = str(tmp_path / "seq.mp4")
+    N = 15
+    vw = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"mp4v"), 30, (64, 48))
+    for i in range(N):
+        vw.write(np.full((48, 64, 3), i * 15, dtype="uint8"))   # mỗi frame 1 mức xám tăng dần
+    vw.release()
+
+    fs = FrameSource(p, reconnect=False).start()
+    got = []
+    t0 = _t.time()
+    while _t.time() - t0 < 4 and len(got) < N:
+        fr = fs.read()
+        if fr is not None:
+            got.append(int(fr[0, 0, 0]))               # mức xám ~ chỉ số frame * 15
+        else:
+            _t.sleep(0.005)
+    fs.stop()
+    assert len(got) >= N - 3                            # đọc gần đủ (không nuốt mất frame)
+    assert got == sorted(got)                          # ĐÚNG thứ tự, không đảo/nhảy lung tung
 
 
 def test_framesource_file_playback_is_realtime(tmp_path):

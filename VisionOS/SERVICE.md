@@ -66,12 +66,23 @@ Video chậm trên CPU (do model nặng) khiến track chập chờn → **cùng
 > Cần chính xác cao hơn (phân biệt loại xe tốt hơn): dùng `yolov8m/x` + `imgsz 960/1280` — nhưng
 > nên có **GPU** để vẫn realtime.
 
-### ▶️ Video FILE bị TUA NHANH?
-Khi nguồn là **file** (`/data/x.mp4` hay URL .mp4), OpenCV đọc frame **nhanh hết cỡ** → video
-chạy như tua nhanh. Đã sửa: FrameSource **phát đúng FPS gốc** của file (đọc được tổng số frame
-→ ngủ cho đủ nhịp mỗi frame) nên video chạy **đúng tốc độ thật**. Camera/RTSP không bị ảnh
-hưởng (nguồn tự giới hạn tốc độ sẵn). Muốn xem **mượt hơn** thì tăng `max_fps` trên web; muốn
-**nhanh hơn cố ý** thì cũng tăng `max_fps` vượt FPS gốc. Rebuild để nhận bản vá.
+### ▶️ Video FILE chạy TUA NHANH / GIẬT (nhanh–chậm) → đếm sai?
+Kiến trúc đọc frame mặc định là kiểu **camera trực tiếp**: luồng nền chỉ giữ **frame mới nhất**
+(bỏ frame cũ để realtime). Với **file** thì sai: OpenCV giải mã nhanh hết cỡ, model lúc nhanh
+lúc chậm → reader nhảy vượt số frame không đều → video **tua nhanh + giật (nhanh–chậm)**, tracker
+nhận nhầm nên **đếm sai**. Đã sửa — service **tự phân biệt file vs stream**:
+
+- **FILE** (`/data/x.mp4` hoặc URL .mp4 — đọc được tổng số frame): đọc **ĐỦ frame, ĐÚNG THỨ TỰ**
+  (hàng đợi có backpressure, **không bỏ frame**) và **phát đúng FPS gốc** → mượt, đúng tốc độ,
+  đếm chính xác. Job xử lý MỌI frame theo thứ tự (không throttle theo `max_fps` nữa).
+- **STREAM** trực tiếp (rtsp/webcam/mjpeg — `frame_count<=0`): giữ **frame mới nhất** + throttle
+  `max_fps` như cũ (ưu tiên realtime, bỏ frame trễ). Không đổi hành vi.
+
+**CPU chậm mà vẫn muốn mượt/đúng tốc độ:** để **Detect mỗi N frame = 2–3** (mặc định đã là **2**)
+— YOLO chỉ chạy mỗi N frame, frame giữa vẽ lại box cũ (rất nhẹ) nên hiển thị mượt gần realtime.
+Model quá nặng so với CPU thì video **chạy hơi chậm hơn thực nhưng vẫn MƯỢT + đúng thứ tự** (không
+giật) → muốn đúng realtime hơn thì dùng `yolov8n` + `imgsz 640`, tăng `detect_every`, hoặc GPU.
+Rebuild để nhận bản vá.
 
 ## 🚑 Xe cấp cứu/xe cao bị gọi là truck/bus? & vạch sót làn ngoài
 - **Sai loại xe (ambulance/van → truck/bus):** model **COCO** (yolov8n/m/x.pt) không có lớp
