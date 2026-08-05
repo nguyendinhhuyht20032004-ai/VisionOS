@@ -1,0 +1,5 @@
+# Video/ảnh người dùng bỏ vào đây CHỈ nằm trên máy — không đẩy lên git.
+# Giữ lại tài liệu hướng dẫn + chính file .gitignore này.
+*
+!.gitignore
+!README.md
