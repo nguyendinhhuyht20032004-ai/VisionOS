@@ -116,15 +116,16 @@ docker compose up --build           # CPU
 # GPU: sửa TORCH_CUDA=cu121 + bỏ comment khối deploy.devices trong compose, cần nvidia-container-toolkit
 ```
 
-## 6. Vector database dùng làm gì? (Qdrant)
-Đếm thuần **không cần** vector DB, nhưng có nó mở ra:
-1. **ReID / chống đếm trùng** — lưu **embedding ngoại hình** mỗi track; vật rời khung rồi quay
-   lại (hoặc sang camera khác) → so vector → nhận ra "cùng một người/xe" → không đếm 2 lần.
-2. **Tìm kiếm** — "tìm người mặc áo đỏ đã đi qua lúc 9h" bằng ảnh/vector truy vấn.
-3. **Lịch sử sự kiện** — lưu mỗi lần cắt vạch (thời gian, lớp, ảnh crop, vector) để thống kê/tra cứu.
+## 6. Vector database (Qdrant)
+Đếm thuần **không cần** vector DB, nhưng có nó mở ra ReID/chống đếm trùng, tra cứu theo
+ngoại hình, và lịch sử sự kiện. Bản demo đã chạy: Qdrant (fallback in-memory), embedding
+là **histogram màu HSV** 256 chiều, mỗi track mới lưu 1 điểm kèm ảnh crop + video clip;
+API `GET /api/events`, `POST /api/search/similar`, `GET /api/vectordb`.
 
-Collection gợi ý: `tracks` (vector ngoại hình + payload: camera, lớp, thời gian, ảnh crop).
-Embedding: dùng feature của YOLO/ByteTrack hoặc 1 model ReID nhỏ (osnet) — chốt ở Phase 3.
+Phần này còn nhiều chỗ phải nâng cấp trước khi tin được (embedding màu còn yếu, point id
+ghi đè sau restart, ảnh nhồi trong payload…). Kế hoạch triển khai chi tiết — giải thích
+khái niệm, hiện trạng theo code, điểm yếu, và lộ trình 4 phase — nằm ở
+[`docs/VECTOR_DB_PLAN.md`](VECTOR_DB_PLAN.md).
 
 ---
 
