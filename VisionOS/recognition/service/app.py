@@ -48,6 +48,43 @@ _LOCK = threading.Lock()
 _VDB = VectorStore()          # Qdrant nếu có QDRANT_URL, không thì in-memory
 
 
+def _save_event_video(frames, out_path, fps: float = 20.0):
+    """Ghi list frame BGR ra MP4 **H.264** để TRÌNH DUYỆT phát được trong thẻ ``<video>``.
+
+    OpenCV chỉ ghi tin cậy codec ``mp4v`` (MPEG-4 Part 2) mà Chrome/Firefox KHÔNG giải mã
+    được trong ``<video>`` — đó là lý do clip trong "Lịch sử sự kiện" mở ra không xem được.
+    Cách chắc ăn: ghi tạm bằng mp4v rồi transcode sang H.264 (yuv420p + faststart để phát
+    và tua được trên web) bằng ffmpeg (đã cài sẵn trong image). Thiếu/lỗi ffmpeg thì giữ
+    nguyên file mp4v (còn hơn không có video).
+    """
+    import subprocess
+
+    import cv2
+
+    if not frames:
+        return
+    h, w = frames[0].shape[:2]
+    scale = 640 / w if w > 640 else 1.0
+    W, H = int(w * scale), int(h * scale)
+    tmp = out_path + ".mp4v.mp4"                       # file trung gian (codec mp4v)
+    vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (W, H))
+    for f in frames:
+        vw.write(cv2.resize(f, (W, H)) if scale != 1.0 else f)
+    vw.release()
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", tmp,
+             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", out_path],
+            check=True, timeout=120,
+        )
+        os.remove(tmp)
+        print(f"✅ Video sự kiện (H.264): {out_path} · {len(frames)} frame")
+    except Exception as e:  # noqa: BLE001 — thiếu/lỗi ffmpeg → dùng luôn mp4v
+        os.replace(tmp, out_path)
+        print(f"⚠️  ffmpeg lỗi ({e}) → giữ mp4v (một số trình duyệt vẫn phát): {out_path}")
+
+
 class JobRequest(BaseModel):
     source: str
     prompt: str = "person"
@@ -146,23 +183,12 @@ class Job:
                     self._record_video_frames -= 1
                     
                     if self._record_video_frames == 0:
-                        print(f"🔄 Triggering video save with {len(self._video_frames_to_write)} frames")
-                        frames = self._video_frames_to_write
-                        fname = self._current_video_filename
-                        def _write_video(f_list, fn):
-                            if not f_list: return
-                            try:
-                                import cv2
-                                h, w = f_list[0].shape[:2]
-                                scale = 640 / w if w > 640 else 1.0
-                                out_video = cv2.VideoWriter(fn, cv2.VideoWriter_fourcc(*'mp4v'), 20.0, (int(w*scale), int(h*scale)))
-                                for f in f_list:
-                                    out_video.write(cv2.resize(f, (int(w*scale), int(h*scale))))
-                                out_video.release()
-                                print(f"✅ Video saved to {fn} with {len(f_list)} frames.")
-                            except Exception as e:
-                                print(f"❌ Failed to save video {fn}: {e}")
-                        threading.Thread(target=_write_video, args=(frames, fname), daemon=True).start()
+                        # Ghi clip ở LUỒNG NỀN (transcode H.264 hơi tốn thời gian) để không nghẽn vòng đếm.
+                        threading.Thread(
+                            target=_save_event_video,
+                            args=(self._video_frames_to_write, self._current_video_filename),
+                            daemon=True,
+                        ).start()
 
                 if self.req.record_events:
                     self._record_events()
@@ -174,16 +200,9 @@ class Job:
         except Exception as e:  # noqa: BLE001
             self.error = f"{type(e).__name__}: {e}"
         finally:
+            # Job dừng giữa lúc đang gom frame → vẫn lưu nốt clip dở (đồng bộ, lúc tắt).
             if getattr(self, '_record_video_frames', 0) > 0 and getattr(self, '_video_frames_to_write', []):
-                frames = self._video_frames_to_write
-                fname = self._current_video_filename
-                import cv2
-                h, w = frames[0].shape[:2]
-                scale = 640 / w if w > 640 else 1.0
-                out_video = cv2.VideoWriter(fname, cv2.VideoWriter_fourcc(*'mp4v'), 20.0, (int(w*scale), int(h*scale)))
-                for f in frames:
-                    out_video.write(cv2.resize(f, (int(w*scale), int(h*scale))))
-                out_video.release()
+                _save_event_video(self._video_frames_to_write, self._current_video_filename)
 
             self.running = False
             self.status = "lỗi" if self.error else "đã dừng"

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from ..base import MonitoringMode
-from ..detectors.yolo_nas import COCO_ALIASES
+from ..coco import COCO_ALIASES
 from ..scenarios import CountScenario
 
 __all__ = ["wants_yolo", "make_scenario", "get_detector", "clear_detector_cache"]
@@ -76,23 +76,23 @@ def make_scenario(prompt: str, counting_type: str = "line",
 
 
 # --------------------------------------------------------------------------- #
-# Detector dùng chung (nạp 1 lần, cache theo kind — LocateAnything ~6GB rất nặng).
+# Detector dùng chung (nạp 1 lần, cache). Service chỉ dùng YOLO (người/xe COCO).
 # --------------------------------------------------------------------------- #
 _DET_CACHE: dict = {}
 
 
-def get_detector(kind: str, confidence: float = 0.25):
-    """Nạp (hoặc lấy từ cache) detector theo kind ∈ {'yolo','locate'}."""
-    if kind not in _DET_CACHE:
-        from ..detectors import load_locate_anything, load_standard_detector
+def get_detector(kind: str = "yolo", confidence: float = 0.25):
+    """Nạp (hoặc lấy từ cache) detector YOLO (super-gradients → fallback ultralytics).
 
-        if kind == "locate":
-            det = load_locate_anything()
-        else:
-            det = load_standard_detector(confidence=confidence)
+    Service chỉ dùng YOLO. Tham số ``kind`` giữ để tương thích chữ ký cũ (bỏ qua giá trị).
+    """
+    if "yolo" not in _DET_CACHE:
+        from ..detectors import load_standard_detector
+
+        det = load_standard_detector(confidence=confidence)
         det.load()
-        _DET_CACHE[kind] = det
-    return _DET_CACHE[kind]
+        _DET_CACHE["yolo"] = det
+    return _DET_CACHE["yolo"]
 
 
 def clear_detector_cache():
