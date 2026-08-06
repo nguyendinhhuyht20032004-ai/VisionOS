@@ -133,7 +133,8 @@ class VectorStore:
                 "events": self.count()}
 
 
-def make_event_payload(track_id: int, class_name: str, source: str, kind: str) -> dict:
+def make_event_payload(track_id: int, class_name: str, source: str, kind: str, image_base64: str = "", full_frame_base64: str = "", video_url: str = "") -> dict:
     """Payload chuẩn cho 1 sự kiện đếm (ts thêm ở nơi gọi để test được không phụ thuộc thời gian)."""
     return {"track_id": int(track_id), "class_name": str(class_name),
-            "source": str(source), "counting_type": str(kind), "ts": time.time()}
+            "source": str(source), "counting_type": str(kind), "ts": time.time(),
+            "image_base64": image_base64, "full_frame_base64": full_frame_base64, "video_url": video_url}

@@ -30,6 +30,7 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .builder import get_detector, make_scenario
@@ -38,6 +39,9 @@ from .engine import StreamingCounter
 from .vectordb import VectorStore, embed_crop, make_event_payload
 
 app = FastAPI(title="VisionOS · AI Counting Service")
+
+os.makedirs("/data/videos", exist_ok=True)
+app.mount("/api/videos", StaticFiles(directory="/data/videos"), name="videos")
 
 _JOBS: "Dict[str, Job]" = {}
 _LOCK = threading.Lock()
@@ -71,7 +75,7 @@ class Job:
             req.prompt, req.counting_type, req.line, req.zone,
             tuple(req.resolution), req.in_label, req.out_label, req.anchor, req.model)
         # Prompt là NHÓM nhiều lớp (vd "vehicle"→car/moto/truck/bus) + group_label → gộp nhãn.
-        from ..detectors.yolo_nas import COCO_ALIASES
+        from ..coco import COCO_ALIASES
         p = req.prompt.lower().strip()
         self.merge_label = req.prompt if (req.group_label and len(COCO_ALIASES.get(p, [])) > 1) else None
         self.source = req.source
@@ -109,6 +113,13 @@ class Job:
             self.status = "đang chạy"
             interval = 1.0 / self.req.max_fps if self.req.max_fps > 0 else 0.0
             last = 0.0
+            import collections
+            import threading
+            self._video_buffer = collections.deque(maxlen=40)  # ~ 1.5 seconds past
+            self._record_video_frames = 0
+            self._current_video_filename = ""
+            self._video_frames_to_write = []
+            
             while self.running:
                 fr = self.fs.read()
                 if fr is None:
@@ -125,6 +136,34 @@ class Job:
                     continue
                 last = now
                 out = self.counter.process(fr)
+                
+                # Push annotated frame to ring buffer
+                self._video_buffer.append(out.copy())
+                
+                # If we are recording future frames
+                if self._record_video_frames > 0:
+                    self._video_frames_to_write.append(out.copy())
+                    self._record_video_frames -= 1
+                    
+                    if self._record_video_frames == 0:
+                        print(f"🔄 Triggering video save with {len(self._video_frames_to_write)} frames")
+                        frames = self._video_frames_to_write
+                        fname = self._current_video_filename
+                        def _write_video(f_list, fn):
+                            if not f_list: return
+                            try:
+                                import cv2
+                                h, w = f_list[0].shape[:2]
+                                scale = 640 / w if w > 640 else 1.0
+                                out_video = cv2.VideoWriter(fn, cv2.VideoWriter_fourcc(*'mp4v'), 20.0, (int(w*scale), int(h*scale)))
+                                for f in f_list:
+                                    out_video.write(cv2.resize(f, (int(w*scale), int(h*scale))))
+                                out_video.release()
+                                print(f"✅ Video saved to {fn} with {len(f_list)} frames.")
+                            except Exception as e:
+                                print(f"❌ Failed to save video {fn}: {e}")
+                        threading.Thread(target=_write_video, args=(frames, fname), daemon=True).start()
+
                 if self.req.record_events:
                     self._record_events()
                 ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -135,6 +174,17 @@ class Job:
         except Exception as e:  # noqa: BLE001
             self.error = f"{type(e).__name__}: {e}"
         finally:
+            if getattr(self, '_record_video_frames', 0) > 0 and getattr(self, '_video_frames_to_write', []):
+                frames = self._video_frames_to_write
+                fname = self._current_video_filename
+                import cv2
+                h, w = frames[0].shape[:2]
+                scale = 640 / w if w > 640 else 1.0
+                out_video = cv2.VideoWriter(fname, cv2.VideoWriter_fourcc(*'mp4v'), 20.0, (int(w*scale), int(h*scale)))
+                for f in frames:
+                    out_video.write(cv2.resize(f, (int(w*scale), int(h*scale))))
+                out_video.release()
+
             self.running = False
             self.status = "lỗi" if self.error else "đã dừng"
             if self.fs is not None:
@@ -149,21 +199,59 @@ class Job:
         if det.tracker_id is None:
             return
         names = det.data.get("class_name") if getattr(det, "data", None) else None
+        
+        # Lấy danh sách track hợp lệ cần lưu
+        valid_tracks = []
         for i, tid in enumerate(det.tracker_id):
-            if tid is None:
-                continue
-            tid = int(tid)
-            if tid in self._recorded:
-                continue
+            if tid is not None and int(tid) not in self._recorded:
+                valid_tracks.append((i, int(tid)))
+        
+        if not valid_tracks:
+            return
+            
+        # Nén ảnh toàn cảnh (full frame) một lần cho cả batch
+        import cv2
+        import base64
+        full_frame_b64 = ""
+        try:
+            h, w = c.last_frame.shape[:2]
+            scale = 640 / w if w > 640 else 1.0
+            resized = cv2.resize(c.last_frame, (int(w*scale), int(h*scale)))
+            succ, buf = cv2.imencode('.jpg', resized, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+            if succ:
+                full_frame_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode('utf-8')
+        except Exception:
+            pass
+
+        # --- VIDEO TRIGGER LOGIC ---
+        import time
+        video_url = ""
+        if getattr(self, '_record_video_frames', 0) == 0:
+            os.makedirs("/data/videos", exist_ok=True)
+            vid_id = int(time.time() * 1000)
+            self._current_video_filename = f"/data/videos/event_{vid_id}.mp4"
+            video_url = f"/api/videos/event_{vid_id}.mp4"
+            self._video_frames_to_write = list(getattr(self, '_video_buffer', []))
+            self._record_video_frames = 40  # ~ 2 seconds future
+        else:
+            video_url = self._current_video_filename.replace("/data/videos/", "/api/videos/")
+
+        for i, tid in valid_tracks:
             x1, y1, x2, y2 = (int(v) for v in det.xyxy[i])
             crop = c.last_frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
             if getattr(crop, "size", 0) == 0:
                 continue
             self._recorded.add(tid)
             nm = str(names[i]) if names is not None else self.req.prompt
+            
+            b64_str = ""
+            success, buffer = cv2.imencode('.jpg', crop, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            if success:
+                b64_str = "data:image/jpeg;base64," + base64.b64encode(buffer).decode('utf-8')
+
             try:
                 _VDB.add_event(embed_crop(crop),
-                               make_event_payload(tid, nm, self.source, self.scenario.counting_type))
+                               make_event_payload(tid, nm, self.source, self.scenario.counting_type, b64_str, full_frame_b64, video_url))
             except Exception:  # noqa: BLE001 — vector DB lỗi KHÔNG được làm hỏng việc đếm
                 pass
 
@@ -281,7 +369,7 @@ def vectordb_status():
 
 @app.get("/api/events")
 def api_events(limit: int = 20):
-    return {"events": _VDB.recent(limit), **_VDB.status()}
+    return {"recent_events": _VDB.recent(limit), **_VDB.status()}
 
 
 @app.post("/api/search/similar")
@@ -326,7 +414,7 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
 <div class="wrap">
  <div class="card" style="flex:1">
   <label>Nguồn camera (RTSP / HTTP / đường dẫn file / "0" = webcam)</label>
-  <input id="source" placeholder='rtsp://... hoặc /data/video.mp4 hoặc 0'>
+  <input id="source" value="https://media.roboflow.com/supervision/video-examples/people-walking.mp4" placeholder='rtsp://... hoặc /data/video.mp4 hoặc 0'>
   <button class="alt" onclick="snap()">📷 Lấy frame để vẽ</button>
   <label>Đối tượng</label>
   <select id="prompt"><option value="person">person (người)</option><option value="vehicle">vehicle (mọi xe)</option><option value="car">car</option><option value="truck">truck</option><option value="bus">bus</option></select>
@@ -417,9 +505,41 @@ function refresh(){ if(!JID)return;
  });
 }
 function loadEvents(){
- fetch('/api/events?limit=20').then(r=>r.json()).then(d=>{
-  let h='<small>Vector DB: '+d.backend+' · '+d.events+' sự kiện</small>';
-  (d.events||[]).forEach(e=>{const p=e.payload||{};h+='<div>#'+p.track_id+' · '+p.class_name+' · '+(p.counting_type||'')+'</div>';});
+ fetch('/api/events?limit=50').then(r=>r.json()).then(d=>{
+  let eventsObj = {};
+  (d.recent_events||[]).forEach(e=>{
+    const p=e.payload||{};
+    let groupKey = Math.floor(p.ts); 
+    if(!eventsObj[groupKey]) {
+      eventsObj[groupKey] = { ts: p.ts, full_frame: p.full_frame_base64, video_url: p.video_url, items: [] };
+    }
+    eventsObj[groupKey].items.push(p);
+  });
+  
+  let h='<small>Vector DB: '+d.backend+' · '+d.events+' bản ghi</small><br><br>';
+  let groups = Object.values(eventsObj).sort((a,b)=>b.ts - a.ts);
+  
+  groups.forEach((g, idx) => {
+    let timeStr = new Date(g.ts * 1000).toLocaleTimeString();
+    h += `<details ${idx === 0 ? 'open' : ''} style="margin-bottom: 10px; background: #222; padding: 10px; border-radius: 6px;">
+            <summary style="cursor: pointer; font-weight: bold; outline: none;">⏱ Sự kiện lúc ${timeStr} - Phát hiện ${g.items.length} đối tượng</summary>
+            <div style="margin-top: 10px;">`;
+    if (g.video_url) {
+      h += `<video src="${g.video_url}" controls autoplay muted loop style="width: 100%; border-radius: 4px; margin-bottom: 10px;"></video>`;
+    } else if (g.full_frame) {
+      h += `<img src="${g.full_frame}" style="width: 100%; border-radius: 4px; margin-bottom: 10px;" />`;
+    }
+    h += `<div style="display: flex; gap: 10px; overflow-x: auto; padding-bottom: 10px;">`;
+    g.items.forEach(p => {
+      let img = p.image_base64 ? `<img src="${p.image_base64}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px;" />` : '';
+      h += `<div style="text-align: center; font-size: 0.8em; background: #333; padding: 5px; border-radius: 4px; min-width: 60px;">
+              ${img}
+              <div style="margin-top: 4px;">#${p.track_id}</div>
+              <div style="color: #aaa;">${p.class_name}</div>
+            </div>`;
+    });
+    h += `</div></div></details>`;
+  });
   document.getElementById('events').innerHTML=h;
  });
 }

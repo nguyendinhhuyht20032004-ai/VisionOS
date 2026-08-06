@@ -22,9 +22,28 @@ __all__ = [
     "ensure_coco_val_annotations",
     "download_image",
     "load_eval_samples",
+    "COCO_ALIASES",
 ]
 
 Box = Tuple[float, float, float, float]
+
+# Ánh xạ prompt tiếng Việt/thông dụng → lớp COCO
+COCO_ALIASES = {
+    "person": ["person"],
+    "người": ["person"],
+    "car": ["car"],
+    "ô tô": ["car"],
+    "oto": ["car"],
+    "xe": ["car", "motorcycle", "truck", "bus"],
+    "xe máy": ["motorcycle"],
+    "motorcycle": ["motorcycle"],
+    "truck": ["truck"],
+    "xe tải": ["truck"],
+    "tải": ["truck"],
+    "bus": ["bus"],
+    "xe buýt": ["bus"],
+    "vehicle": ["car", "truck", "bus", "motorcycle"],
+}
 
 # 1 "lớp đánh giá" = prompt gửi cho model + tập danh mục COCO tính là ground-truth.
 EVAL_CLASSES: Dict[str, dict] = {
