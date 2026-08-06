@@ -108,17 +108,24 @@ class VectorStore:
         scored.sort(key=lambda x: -x[0])
         return [{"id": it["id"], "score": s, "payload": it["payload"]} for s, it in scored[:limit]]
 
-    def recent(self, limit: int = 20) -> List[dict]:
+    def recent(self, limit: int = 20, source: Optional[str] = None) -> List[dict]:
         """Sự kiện GẦN NHẤT (mới → cũ)."""
         if self.backend == "qdrant" and self._client is not None:
             try:
-                pts, _ = self._client.scroll(self.collection, limit=limit, with_payload=True,
-                                             order_by=None)
+                fetch_limit = limit * 10 if source else limit
+                start_id = max(0, self._n - fetch_limit)
+                ids = list(range(start_id, self._n))
+                pts = self._client.retrieve(self.collection, ids=ids, with_payload=True) if ids else []
                 items = [{"id": p.id, "payload": p.payload or {}} for p in pts]
+                if source:
+                    items = [it for it in items if it["payload"].get("source") == source]
                 return sorted(items, key=lambda x: x["payload"].get("ts", 0), reverse=True)[:limit]
             except Exception:  # noqa: BLE001
                 pass
-        return [{"id": it["id"], "payload": it["payload"]} for it in self._mem[-limit:]][::-1]
+        items = [{"id": it["id"], "payload": it["payload"]} for it in self._mem]
+        if source:
+            items = [it for it in items if it["payload"].get("source") == source]
+        return items[-limit:][::-1]
 
     def count(self) -> int:
         if self.backend == "qdrant" and self._client is not None:

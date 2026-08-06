@@ -367,9 +367,27 @@ def vectordb_status():
     return _VDB.status()
 
 
+# --------------------------------------------------------------------------- #
+# Mock API cho kết quả đếm (Dựa theo API_SCHEMA.md)
+# --------------------------------------------------------------------------- #
+@app.get("/api/v1/counting-result")
+def get_mock_counting_result():
+    import json
+    import os
+    # Đường dẫn trỏ tới file mock_responses.json (do Docker WORKDIR là /app)
+    mock_path = "docs/mock_responses.json"
+    if os.path.exists(mock_path):
+        with open(mock_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Trả về kịch bản success mặc định
+            return data.get("success", {})
+    return {"status": "error", "message": "Không tìm thấy file mock_responses.json"}
+
+
+
 @app.get("/api/events")
-def api_events(limit: int = 20):
-    return {"recent_events": _VDB.recent(limit), **_VDB.status()}
+def api_events(source: Optional[str] = None, limit: int = 20):
+    return {"recent_events": _VDB.recent(limit, source=source), **_VDB.status()}
 
 
 @app.post("/api/search/similar")
@@ -505,7 +523,8 @@ function refresh(){ if(!JID)return;
  });
 }
 function loadEvents(){
- fetch('/api/events?limit=50').then(r=>r.json()).then(d=>{
+ let src = document.getElementById('source').value;
+ fetch('/api/events?limit=50&source=' + encodeURIComponent(src)).then(r=>r.json()).then(d=>{
   let eventsObj = {};
   (d.recent_events||[]).forEach(e=>{
     const p=e.payload||{};
