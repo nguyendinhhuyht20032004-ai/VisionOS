@@ -156,8 +156,9 @@ tiên sửa đúng.
 `embed_crop` mã hoá **màu sắc**, không mã hoá hình dáng hay danh tính. Hai người mặc áo
 đỏ giống nhau cho vector gần như trùng, còn cùng một người đi qua vùng sáng rồi vùng tối
 lại cho hai vector khác nhau. Với demo "tìm vật cùng màu" thì tạm ổn; với ReID thật
-(khẳng định *cùng một người*) thì độ chính xác thấp, không đủ để tự động chống đếm trùng.
-Đây là hạng mục nâng cấp lớn nhất (mục 6, P2).
+(khẳng định *cùng một người*) thì độ chính xác thấp. Chính vì vector còn yếu nên
+`TrackStitcher` (P3) phải chặn nhầm bằng vị trí + thời gian rất chặt; muốn nới các ngưỡng
+đó mà vẫn an toàn thì cần embedding mạnh hơn. Đây là hạng mục nâng cấp lớn nhất (mục 6, P2).
 
 ### 5.2. Point id trùng sau khi restart → ghi đè dữ liệu cũ
 
@@ -238,6 +239,13 @@ bảng số đo trước/sau khi đổi embedding.
 ### P3 — Tự động chống đếm trùng (ReID trong vòng đếm)
 
 Mục tiêu: một vật đi qua nhiều lần / nhiều camera chỉ tính một lần.
+
+> ✅ **Đã có bản đầu (trong 1 camera):** `recognition/service/reid.py` — khi ByteTrack cấp
+> `track_id` mới cho vật vừa biến mất rồi hiện lại, `TrackStitcher` gán về id cũ theo
+> ngoại hình + vị trí + thời gian (chặn nhầm bằng: id cũ phải đang vắng mặt, cùng nhóm
+> lớp, gần chỗ biến mất, trong cửa sổ thời gian ngắn). Bật mặc định, tắt/chỉnh qua env
+> `REID_STITCH` / `REID_SIM` / `REID_GAP` / `REID_DIST`. Còn lại của P3 (xuyên camera,
+> định danh toàn cục) và độ chính xác cao hơn phụ thuộc embedding mạnh ở P2.
 
 - Khi một `track_id` mới xuất hiện, search vector của nó trong cửa sổ thời gian gần và
   trong nhóm camera liên quan.

@@ -52,6 +52,19 @@ class StreamingCounter:
         except Exception:  # noqa: BLE001
             self.smoother = None
 
+        # ReID nối track ĐỨT: vật bị che/detect trượt rồi hiện lại được ByteTrack cấp id MỚI →
+        # gán về id CŨ theo ngoại hình + vị trí + thời gian → hết đếm trùng / phình "số vật".
+        # Tắt/chỉnh qua env: REID_STITCH=0 (tắt), REID_SIM, REID_GAP, REID_DIST.
+        import os
+
+        from .reid import TrackStitcher
+        self._stitcher = TrackStitcher(
+            sim_thresh=float(os.environ.get("REID_SIM", "0.5")),
+            max_gap=int(os.environ.get("REID_GAP", "60")),
+            max_dist_frac=float(os.environ.get("REID_DIST", "0.3")),
+            enabled=os.environ.get("REID_STITCH", "1").lower() not in ("0", "false", "no", ""),
+        )
+
         # Vạch / vùng.
         self.line = None
         self.polys = []
@@ -127,6 +140,7 @@ class StreamingCounter:
 
             det = _to_sv(dr.detections, sv, np)
             det = self.tracker.update_with_detections(det)
+            det = self._stitch(det, frame_bgr)   # ReID: nối lại track bị đứt (giữ 1 id/vật)
             if self.smoother is not None:
                 try:
                     det = self.smoother.update_with_detections(det)
@@ -175,6 +189,30 @@ class StreamingCounter:
             out = _draw(frame_bgr, det, self.scenario, self.line, self.zones_px, self.result,
                         self.w, self.h, cv2, np)
         return out
+
+    # ------------------------------------------------------------------ #
+    def _stitch(self, det, frame_bgr):
+        """Remap ``tracker_id`` qua ReID (nối track đứt). Giữ nguyên nếu tắt/không có track."""
+        st = getattr(self, "_stitcher", None)
+        if st is None or not st.enabled or det.tracker_id is None or len(det) == 0:
+            return det
+        np = self._np
+        from .vectordb import embed_crop
+
+        boxes = det.xyxy
+        if getattr(det, "data", None) and "class_name" in det.data:
+            classes = [str(c) for c in det.data["class_name"]]
+        else:
+            classes = [None] * len(det)
+        embs = []
+        for i in range(len(det)):
+            x1, y1, x2, y2 = (int(v) for v in boxes[i])
+            crop = frame_bgr[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+            embs.append(embed_crop(crop))
+        raw = [int(t) if t is not None else None for t in det.tracker_id]
+        stable = st.remap(raw, boxes, embs, classes, (self.w, self.h))
+        det.tracker_id = np.array([s if s is not None else -1 for s in stable], dtype=int)
+        return det
 
     # ------------------------------------------------------------------ #
     def _stabilize_class(self, det):
