@@ -16,7 +16,7 @@ import time
 from typing import List, Optional, Set
 
 from ..base import BoundingBox, Detection, DetectorResult
-from .yolo_nas import COCO_ALIASES  # dùng chung bảng ánh xạ prompt → lớp COCO
+from ..coco import COCO_ALIASES  # dùng chung bảng ánh xạ prompt → lớp COCO
 
 __all__ = ["UltralyticsYoloDetector"]
 
