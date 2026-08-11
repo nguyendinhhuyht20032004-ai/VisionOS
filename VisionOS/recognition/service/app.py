@@ -105,6 +105,11 @@ def stop_stream(stream_id: str):
         raise HTTPException(status_code=500, detail="StreamManager/Redis not initialized")
     try:
         stream_manager.stop(stream_id)
+        try:
+            from .frame_consumer import unregister_job
+            unregister_job(stream_id)
+        except Exception:
+            pass
         return {"status": "success", "message": f"Stream {stream_id} stopped"}
     except KeyError:
         raise HTTPException(status_code=404, detail="Stream not found")
@@ -438,6 +443,11 @@ def job_stats(job_id: str):
 @app.post("/api/jobs/{job_id}/stop")
 def stop_job(job_id: str):
     _get(job_id).stop()
+    try:
+        from .frame_consumer import unregister_job
+        unregister_job(job_id)
+    except Exception:
+        pass
     return {"id": job_id, "stopped": True}
 
 
