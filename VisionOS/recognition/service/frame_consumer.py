@@ -163,6 +163,16 @@ def _process_message(redis_client, msg_id: str, fields: dict):
     if now - job.last_publish_time >= interval:
         job.last_publish_time = now
         stats = job.counter.stats()
+        
+        # Bổ sung các trường chuẩn JobStats theo API_SCHEMA_PLAN.md
+        stats["id"] = job.id
+        stats["running"] = True
+        stats["status"] = "đang chạy"
+        stats["error"] = None
+        stats["source"] = job.config.get("source", "")
+        stats["kind"] = job.kind
+        stats["source_ok"] = True
+
         result_msg = {
             "event_type": "frame_result",
             "job_id": job_id,
