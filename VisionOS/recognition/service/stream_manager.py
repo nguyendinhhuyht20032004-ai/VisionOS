@@ -184,24 +184,15 @@ class StreamWorker(threading.Thread):
                 if tid in self._reported_tracks:
                     self._reported_tracks.remove(tid)
             
-            # Emit line crossing events (IN / OUT)
+            # Clear line crossing events — IN/OUT không nằm trong enum start|end của spec
             if hasattr(det, "cross_events"):
-                for event_tid, event_type in det.cross_events:
-                    # Find class_name for this event_tid
-                    cls_name = ""
-                    for i, t in enumerate(det.tracker_id):
-                        if t == event_tid:
-                            cls_name = str(det.data.get("class_name")[i]) if "class_name" in det.data and len(det.data["class_name"]) > i else ""
-                            break
-                    self._publish_track_event(str(event_tid), cls_name, event_type)
-                # Clear events after publishing
                 det.cross_events = []
-                
+
         frame_msg = {
             "type": "frame",
             "camera_id": self.camera_id,
             "stream_id": self.stream_id,
-            "frame_timestamp": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "frame_timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             "boxes": boxes,
         }
         
@@ -225,7 +216,7 @@ class StreamWorker(threading.Thread):
             "track_id": track_id,
             "class": class_name,
             "event": event,
-            "timestamp": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         }
         self.redis.xadd(
             self.stream_key,

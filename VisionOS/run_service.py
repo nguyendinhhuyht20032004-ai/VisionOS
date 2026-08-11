@@ -27,7 +27,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("CONTROL_API_PORT", "8000")))
     ap.add_argument("--reload", action="store_true", help="tự nạp lại khi sửa code (dev)")
     args = ap.parse_args()
 
