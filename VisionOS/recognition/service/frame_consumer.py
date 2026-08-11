@@ -27,12 +27,7 @@ from typing import Dict, Optional
 import cv2
 import numpy as np
 
-logger = logging.getLogger("frame_consumer")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("[FrameConsumer] %(asctime)s | %(levelname)s | %(message)s"))
-    logger.addHandler(handler)
+logger = logging.getLogger("uvicorn.error")
 
 # ---------------------------------------------------------------------------
 # Config từ biến môi trường (giống docker-compose.yml hiện tại)
@@ -134,29 +129,32 @@ def _process_message(redis_client, msg_id: str, fields: dict):
             config_raw = config_raw.decode("utf-8")
         try:
             config = json.loads(config_raw)
-            with _CONSUMER_LOCK:
-                if job_id not in _CONSUMER_JOBS:
-                    register_job(job_id, config)
+            if job_id not in _CONSUMER_JOBS:
+                logger.info("Đang đăng ký job %s", job_id)
+                register_job(job_id, config)
+                logger.info("Đã đăng ký xong job %s", job_id)
         except json.JSONDecodeError:
             pass
 
-    # --- Bước 3: Lookup job ---
-    with _CONSUMER_LOCK:
-        job = _CONSUMER_JOBS.get(job_id)
+    # --- Bước 3: Lấy job ---
+    job = _CONSUMER_JOBS.get(job_id)
     if job is None:
-        logger.warning("Job '%s' chưa đăng ký → skip frame %s.", job_id, frame_id)
+        logger.warning("Job '%s' chưa đăng ký → skip frame %s.", job_id, fields.get(b"frame_id", b"").decode("utf-8"))
         return
 
-    # --- Bước 4: Decode JPEG → BGR matrix ---
-    if isinstance(image_bytes, str):
-        image_bytes = image_bytes.encode("latin-1")
-    arr = np.frombuffer(image_bytes, dtype=np.uint8)
-    frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    # --- Bước 4: Chạy AI ---
+    frame_bytes = fields.get(b"image")
+    if not frame_bytes:
+        return
+
+    frame_arr = np.frombuffer(frame_bytes, np.uint8)
+    frame_bgr = cv2.imdecode(frame_arr, cv2.IMREAD_COLOR)
     if frame_bgr is None:
         logger.warning("Job '%s' frame %s: JPEG decode thất bại → skip.", job_id, frame_id)
         return
 
     # --- Bước 5: Chạy AI (inference) ---
+    # logger.debug("Chạy AI cho job %s frame %s", job_id, frame_id)
     annotated = job.counter.process(frame_bgr)
 
     # --- Bước 6: Publish frame_result (throttle theo PUBLISH_FPS) ---

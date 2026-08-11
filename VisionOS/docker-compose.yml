@@ -25,6 +25,8 @@ services:
       - YOLO_WEIGHTS=yolov8n.pt   # nhẹ nhất → realtime CPU
       - YOLO_IMGSZ=640            # ảnh nhỏ → nhanh (1280 cần GPU)
       - YOLO_CONF=0.3             # ngưỡng cao hơn → ít box mờ/nhầm car↔truck
+    volumes:
+      - ./recognition:/app/recognition
     depends_on:
       - qdrant
       - redis
