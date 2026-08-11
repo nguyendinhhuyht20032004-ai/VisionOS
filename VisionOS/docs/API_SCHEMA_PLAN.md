@@ -28,7 +28,7 @@ StreamingCounter.process(frame_bgr)
       └─► annotate     →  frame BGR đã vẽ
             │
             ▼
-      Job._record_events()
+      
             ├─► embed_crop (HSV histogram 256-d, L2-normalize)
             ├─► VectorStore.add_event  (Qdrant / in-memory fallback)
             └─► _save_event_video     (H.264 clip ~2 giây, ffmpeg)
@@ -117,51 +117,6 @@ API Response ◄─── Job.stats() + CountResult
 | `in_frame` | `integer ≥0` | Số vật đang trong khung tại thời điểm query |
 | `peak` | `integer ≥0` | Số vật đông nhất từng có trong khung |
 | `total` | `integer ≥0` | Tổng vật khác nhau đã thấy (= `tracks`) |
-
----
-
-### 2.3 `EventPayload` — dữ liệu của 1 sự kiện trong vector DB
-
-| Trường | Kiểu | Mô tả |
-|---|---|---|
-| `track_id` | `integer` | ID vật trong phiên (ByteTrack + ReID) |
-| `class_name` | `string` | Lớp: `"person"`, `"car"`, `"truck"`, `"bus"`, `"motorcycle"`, ... |
-| `source` | `string` | Nguồn camera ghi sự kiện |
-| `counting_type` | `string` | Kiểu đếm của job (`"line"`, `"zone"`, `"fullscreen"`) |
-| `ts` | `number` | Unix timestamp (float, giây, VD `1754470800.123`) |
-| `image_base64` | `string` | Data URI ảnh crop vật (`"data:image/jpeg;base64,..."`) — chuỗi rỗng nếu lỗi crop |
-| `full_frame_base64` | `string` | Data URI ảnh toàn cảnh thu nhỏ (max 640px wide) |
-| `video_url` | `string` | Đường dẫn clip H.264 (`"/api/videos/event_1234.mp4"`) — rỗng nếu chưa ghi xong |
-
----
-
-### 2.4 `EventRecord` — 1 mục trong response `/api/events`
-
-| Trường | Kiểu | Mô tả |
-|---|---|---|
-| `id` | `integer` | ID nội bộ trong vector DB |
-| `payload` | `EventPayload` | Thông tin vật (xem §2.3) |
-
----
-
-### 2.5 `SearchResult` — 1 kết quả của `/api/search/similar`
-
-| Trường | Kiểu | Mô tả |
-|---|---|---|
-| `id` | `integer` | ID điểm trong vector DB |
-| `score` | `number` (0–1) | Độ tương đồng cosine (1.0 = giống hoàn toàn) |
-| `payload` | `EventPayload` | Thông tin vật tìm được |
-
----
-
-### 2.6 `VectorDBStatus` — response `/api/vectordb`
-
-| Trường | Kiểu | Mô tả |
-|---|---|---|
-| `backend` | `"qdrant"\|"memory"` | Backend đang dùng |
-| `url` | `string\|null` | Qdrant URL (null nếu không cấu hình `QDRANT_URL`) |
-| `collection` | `string` | Tên collection Qdrant (mặc định `"tracks"`) |
-| `events` | `integer ≥0` | Tổng số sự kiện đã lưu |
 
 ---
 
@@ -271,58 +226,7 @@ API Response ◄─── Job.stats() + CountResult
 
 ---
 
-### 3.9 `GET /api/vectordb`
-
-**Mục đích:** Trạng thái vector DB (debug, monitoring).
-
-**Output 200:** `VectorDBStatus` (§2.6).
-
----
-
-### 3.10 `GET /api/events`
-
-**Mục đích:** Lấy sự kiện gần nhất (vật đã qua camera).
-
-**Input (query params):**
-
-| Param | Kiểu | Mô tả |
-|---|---|---|
-| `source` | `string` | Lọc theo nguồn camera. Bỏ trống = tất cả |
-| `limit` | `integer` | Số mục trả về. Mặc định: `20` |
-
-**Output 200:**
-```json
-{
-  "recent_events": [ <EventRecord>, ... ],
-  "backend": "qdrant",
-  "url": "http://qdrant:6333",
-  "collection": "tracks",
-  "events": 47
-}
-```
-
----
-
-### 3.11 `POST /api/search/similar`
-
-**Mục đích:** Upload ảnh → tìm vật trông giống nhất trong lịch sử (ReID).
-
-**Input:** `multipart/form-data`
-- `file` (UploadFile, bắt buộc): Ảnh JPEG/PNG bất kỳ.
-- `limit` (query integer): Số kết quả. Mặc định: `5`.
-
-**Output 200:**
-```json
-{
-  "results": [ <SearchResult>, ... ]
-}
-```
-
-**Lỗi:** `400 Bad Request` — ảnh không decode được.
-
----
-
-### 3.12 `GET /api/v1/counting-result` ← MOCK ENDPOINT
+### 3.9 `GET /api/v1/counting-result` ← MOCK ENDPOINT
 
 **Mục đích:** Response hardcode cho dev frontend tích hợp mà không cần camera thật.
 
@@ -486,9 +390,6 @@ class JobStatsLine(BaseModel):
 | `/api/jobs/{id}/stop` | POST | path `job_id` | `{id, stopped}` |
 | `/api/jobs/{id}/frame.jpg` | GET | path `job_id` | Binary JPEG |
 | `/api/jobs/{id}/mjpeg` | GET | path `job_id` | MJPEG stream |
-| `/api/vectordb` | GET | — | `VectorDBStatus` |
-| `/api/events` | GET | `?source&limit` | `{recent_events[], ...VectorDBStatus}` |
-| `/api/search/similar` | POST | multipart `file` + `?limit` | `{results: SearchResult[]}` |
 | `/api/v1/counting-result` | GET | `?scenario` | `JobStats` (mock hardcode) |
 
 ---
@@ -504,8 +405,5 @@ class JobStatsLine(BaseModel):
 3. **Polling vs. Streaming:** Số đếm lấy bằng polling `GET /api/jobs/{id}` mỗi 1 giây.
    Luồng video xem bằng `<img src=".../mjpeg">`. Không cần WebSocket.
 
-4. **Sự kiện (Events):** `GET /api/events` trả tối đa `limit` sự kiện gần nhất. Mỗi sự
-   kiện chứa ảnh crop + ảnh toàn cảnh (Data URI) + URL clip H.264.
-
-5. **Mock Dev:** Dùng `/api/v1/counting-result` để test render UI mà không cần camera. Sau
+4. **Mock Dev:** Dùng `/api/v1/counting-result` để test render UI mà không cần camera. Sau
    khi tích hợp xong thì chuyển sang poll `GET /api/jobs/{id}` với job thật.
