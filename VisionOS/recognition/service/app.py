@@ -64,6 +64,16 @@ except Exception as e:
     stream_manager = None
 
 # ---------------------------------------------------------------------------
+# Frame Consumer (BỔ SUNG — chạy song song, không thay thế gì)
+# ---------------------------------------------------------------------------
+try:
+    from .frame_consumer import start_consumer
+    start_consumer()
+    print("✅ FrameConsumer đã khởi động (lắng nghe Redis stream)")
+except Exception as e:
+    print(f"⚠️ FrameConsumer không khởi động được: {e}")
+
+# ---------------------------------------------------------------------------
 # Stream Control API (theo AI_SERVICE_INTEGRATION.md)
 # ---------------------------------------------------------------------------
 
