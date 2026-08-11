@@ -103,15 +103,23 @@ def update_stream(stream_id: str, params: StreamParams):
 def stop_stream(stream_id: str):
     if not stream_manager:
         raise HTTPException(status_code=500, detail="StreamManager/Redis not initialized")
+    
+    # [TẮT AI CONSUMER]
+    try:
+        from .frame_consumer import unregister_job, _CONSUMER_JOBS
+        if stream_id in _CONSUMER_JOBS:
+            unregister_job(stream_id)
+    except Exception:
+        pass
+
     try:
         stream_manager.stop(stream_id)
-        try:
-            from .frame_consumer import unregister_job
-            unregister_job(stream_id)
-        except Exception:
-            pass
         return {"status": "success", "message": f"Stream {stream_id} stopped"}
     except KeyError:
+        # Nếu không có trong stream_manager nhưng đã xoá bên AI thành công thì coi như OK
+        from .frame_consumer import _CONSUMER_JOBS
+        if stream_id not in _CONSUMER_JOBS:
+             return {"status": "success", "message": f"AI Consumer {stream_id} stopped"}
         raise HTTPException(status_code=404, detail="Stream not found")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -442,12 +450,17 @@ def job_stats(job_id: str):
 
 @app.post("/api/jobs/{job_id}/stop")
 def stop_job(job_id: str):
-    _get(job_id).stop()
     try:
         from .frame_consumer import unregister_job
         unregister_job(job_id)
     except Exception:
         pass
+        
+    try:
+        _get(job_id).stop()
+    except HTTPException:
+        pass # Ignore 404 from _get if it's only a Consumer job
+        
     return {"id": job_id, "stopped": True}
 
 
