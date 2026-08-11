@@ -350,33 +350,22 @@ class Job:
 
 
 # ---------------------------------------------------------------------------
-# API: Hardcoded Job Stats (Theo API_SCHEMA_PLAN nhánh claude/...)
+# API: Mock Endpoint (Theo API_SCHEMA_PLAN Mục 3.12)
 # ---------------------------------------------------------------------------
-@app.get("/api/jobs/demo0001")
+@app.get("/api/v1/counting-result")
 def get_mock_job_stats():
-    data = {
-        "id": "demo0001",
-        "running": True,
-        "status": "đang chạy",
-        "error": None,
-        "source": "rtsp://demo-camera.local/stream1",
-        "kind": "yolo",
-        "source_ok": True,
-        "scenario": "stream",
-        "prompt": "person",
-        "counting_type": "line",
-        "in_label": "IN",
-        "out_label": "OUT",
-        "in": 34,
-        "out": 21,
-        "total": 55,
-        "tracks": 58,
-        "frames": 1440,
-        "det_per_frame": 3.2,
-        "fps": 11.8,
-        "latency_ms": 45.3
-    }
-    return JSONResponse(content=data, media_type="application/json; charset=utf-8")
+    """Đọc file docs/mock_responses.json và trả về key 'success'."""
+    mock_file = os.path.join(os.path.dirname(__file__), "..", "..", "docs", "mock_responses.json")
+    try:
+        with open(mock_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return JSONResponse(content=data.get("success", {}), media_type="application/json; charset=utf-8")
+    except (FileNotFoundError, json.JSONDecodeError):
+        return JSONResponse(
+            content={"status": "error", "message": "Không tìm thấy file mock_responses.json"},
+            status_code=404,
+            media_type="application/json; charset=utf-8"
+        )
 
 # ---------------------------------------------------------------------------
 # Control API (POST/PATCH/DELETE)
