@@ -28,7 +28,12 @@ import time
 import uuid
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile, Body
+import redis, json, datetime, os
+from pydantic import BaseModel, Field
+
+# Import StreamManager (new module)
+from .stream_manager import StreamManager, StreamControlRequest, StreamParams
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -42,6 +47,60 @@ app = FastAPI(title="VisionOS · AI Counting Service")
 
 os.makedirs("/data/videos", exist_ok=True)
 app.mount("/api/videos", StaticFiles(directory="/data/videos"), name="videos")
+
+# ---------------------------------------------------------------------------
+# Redis & Stream Manager Init
+# -----------------------------------------------------------------# ----- Initialize Stream Manager -----
+try:
+    import redis
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_client = redis.from_url(redis_url, decode_responses=True)
+    from recognition.service.stream_manager import StreamManager
+    stream_manager = StreamManager(redis_cli=redis_client)
+    print(f"✅ Bật Stream Control API (Redis={redis_url})")
+except Exception as e:
+    print(f"Warning: Failed to init Redis. Error: {e}")
+    redis_client = None
+    stream_manager = None
+
+# ---------------------------------------------------------------------------
+# Stream Control API (theo AI_SERVICE_INTEGRATION.md)
+# ---------------------------------------------------------------------------
+
+@app.post("/streams/{stream_id}")
+def start_stream(stream_id: str, req: StreamControlRequest):
+    if not stream_manager:
+        raise HTTPException(status_code=500, detail="StreamManager/Redis not initialized")
+    try:
+        stream_manager.start(stream_id, req)
+        return {"status": "success", "message": f"Stream {stream_id} started"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.patch("/streams/{stream_id}")
+def update_stream(stream_id: str, params: StreamParams):
+    if not stream_manager:
+        raise HTTPException(status_code=500, detail="StreamManager/Redis not initialized")
+    try:
+        stream_manager.update(stream_id, params)
+        return {"status": "success", "message": f"Stream {stream_id} updated"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Stream not found")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/streams/{stream_id}")
+def stop_stream(stream_id: str):
+    if not stream_manager:
+        raise HTTPException(status_code=500, detail="StreamManager/Redis not initialized")
+    try:
+        stream_manager.stop(stream_id)
+        return {"status": "success", "message": f"Stream {stream_id} stopped"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Stream not found")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 _JOBS: "Dict[str, Job]" = {}
 _LOCK = threading.Lock()
@@ -290,8 +349,37 @@ class Job:
             return self.last_jpg
 
 
-# --------------------------------------------------------------------------- #
-# Health + snapshot
+# ---------------------------------------------------------------------------
+# API: Hardcoded Job Stats (Theo API_SCHEMA_PLAN nhánh claude/...)
+# ---------------------------------------------------------------------------
+@app.get("/api/jobs/demo0001")
+def get_mock_job_stats():
+    data = {
+        "id": "demo0001",
+        "running": True,
+        "status": "đang chạy",
+        "error": None,
+        "source": "rtsp://demo-camera.local/stream1",
+        "kind": "yolo",
+        "source_ok": True,
+        "scenario": "stream",
+        "prompt": "person",
+        "counting_type": "line",
+        "in_label": "IN",
+        "out_label": "OUT",
+        "in": 34,
+        "out": 21,
+        "total": 55,
+        "tracks": 58,
+        "frames": 1440,
+        "det_per_frame": 3.2,
+        "fps": 11.8,
+        "latency_ms": 45.3
+    }
+    return JSONResponse(content=data, media_type="application/json; charset=utf-8")
+
+# ---------------------------------------------------------------------------
+# Control API (POST/PATCH/DELETE)
 # --------------------------------------------------------------------------- #
 @app.get("/healthz")
 def healthz():
@@ -389,7 +477,21 @@ def vectordb_status():
 # --------------------------------------------------------------------------- #
 # Mock API cho kết quả đếm (Dựa theo API_SCHEMA.md)
 # --------------------------------------------------------------------------- #
-@app.get("/api/v1/counting-result")
+from pydantic import Field
+
+class CountingData(BaseModel):
+    total_in: int = Field(..., description="Tổng số lượng đối tượng đã đi VÀO")
+    total_out: int = Field(..., description="Tổng số lượng đối tượng đã đi RA")
+    current_total: int = Field(..., description="Số lượng đối tượng hiện đang CÓ MẶT trong khu vực")
+    timestamp: str = Field(..., description="Thời gian trả kết quả (ISO 8601)")
+
+class CountingResponse(BaseModel):
+    status: str = Field(..., description="Trạng thái: success, processing, error")
+    job_id: str = Field(..., description="Mã định danh phiên xử lý")
+    data: Optional[CountingData] = Field(None, description="Kết quả tính toán")
+    message: Optional[str] = Field(None, description="Thông báo đi kèm")
+
+@app.get("/api/v1/counting-result", response_model=CountingResponse, summary="Lấy kết quả đếm (Mock)")
 def get_mock_counting_result():
     import json
     import os
@@ -401,6 +503,28 @@ def get_mock_counting_result():
             # Trả về kịch bản success mặc định
             return data.get("success", {})
     return {"status": "error", "message": "Không tìm thấy file mock_responses.json"}
+
+# --------------------------------------------------------------------------- #
+# Hard‑coded example response (demo integration of API_SCHEMA)
+# --------------------------------------------------------------------------- #
+from datetime import datetime
+
+@app.get("/api/example-response", response_model=CountingResponse, summary="Hard‑coded example response (demo)")
+def get_example_response():
+    """Return the example response documented in `docs/API_SCHEMA.md`.
+    Useful for clients that just need a static schema‑compliant payload.
+    """
+    return {
+        "status": "success",
+        "job_id": "demo_job_001",
+        "data": {
+            "total_in": 12,
+            "total_out": 5,
+            "current_total": 7,
+            "timestamp": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        },
+        "message": "Demo hard‑coded counting result",
+    }
 
 
 
@@ -480,6 +604,7 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
   <div id="stats"></div>
   <canvas id="cv" width="960" height="540"></canvas>
   <img id="view" style="display:none" alt="">
+  <div id="console-logs" style="margin-top: 15px; padding: 12px; background: #000; color: #0f0; font-family: monospace; height: 150px; overflow-y: hidden; border-radius: 6px; font-size: 13px; display: none; line-height: 1.4;"></div>
  </div>
 </div>
 <script>
@@ -539,6 +664,26 @@ function refresh(){ if(!JID)return;
   add('Số vật (track)',s.tracks||0); add('det/frame',s.det_per_frame||0); add('fps',s.fps||0);
   h+='<div><small>'+(s.status||'')+(s.error?(' · LỖI: '+s.error):'')+' · camera '+(s.source_ok?'OK':'chờ')+'</small></div>';
   document.getElementById('stats').innerHTML=h;
+  
+  // Hiển thị Log Terminal trực tiếp trên Web
+  let logDiv = document.getElementById('console-logs');
+  if(logDiv) {
+      logDiv.style.display = 'block';
+      let frameStr = ('0000' + (s.frames||0)).slice(-4);
+      let detStr = (s.detections && s.detections.length > 0) ? s.detections.join(", ") : "None";
+      
+      let logMsg = `<b>[AI Supervision] Frame ${frameStr}</b> - Tốc độ: ${s.fps||0} fps<br>`;
+      logMsg += `<span style="color: #38bdf8;">→ Phát hiện (${s.detections ? s.detections.length : 0} đối tượng):</span> ${detStr}<br>`;
+      
+      if(s.counting_type === 'line') {
+          logMsg += `<span style="color: #facc15;">→ Thống kê:</span> Đang theo dõi (Tracks): ${s.tracks||0} | IN: ${s.in||0} | OUT: ${s.out||0}<br>`;
+      } else {
+          let inView = s.in_zone !== undefined ? s.in_zone : (s.in_frame||0);
+          logMsg += `<span style="color: #facc15;">→ Thống kê:</span> Đang theo dõi (Tracks): ${s.tracks||0} | Đang có trên màn hình: ${inView}<br>`;
+      }
+      logMsg += `<span style="color: #333;">----------------------------------------</span><br>`;
+      logDiv.innerHTML = logMsg + logDiv.innerHTML;
+  }
  });
 }
 function loadEvents(){

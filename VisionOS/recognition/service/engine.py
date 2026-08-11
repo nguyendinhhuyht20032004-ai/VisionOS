@@ -154,9 +154,18 @@ class StreamingCounter:
                         self._seen.add(int(tid))
 
             if self.line is not None:
-                self.line.trigger(det)
+                in_match, out_match = self.line.trigger(det)
                 self.result.in_count = int(self.line.in_count)
                 self.result.out_count = int(self.line.out_count)
+                # Lưu lại các sự kiện cắt vạch để StreamManager đọc và publish JSON
+                if not hasattr(det, "cross_events"):
+                    det.cross_events = []
+                for i, is_in in enumerate(in_match):
+                    if is_in and det.tracker_id[i] is not None:
+                        det.cross_events.append((det.tracker_id[i], "IN"))
+                for i, is_out in enumerate(out_match):
+                    if is_out and det.tracker_id[i] is not None:
+                        det.cross_events.append((det.tracker_id[i], "OUT"))
             if self.polys:
                 inside = np.zeros(len(det), dtype=bool)
                 for pz in self.polys:
@@ -188,6 +197,15 @@ class StreamingCounter:
         if out is None:
             out = _draw(frame_bgr, det, self.scenario, self.line, self.zones_px, self.result,
                         self.w, self.h, cv2, np)
+
+        # ---- THÊM LOG TERMINAL ĐỂ DEMO BÁO CÁO ----
+        if self._frame_i % 10 == 0:
+            s = self.stats()
+            if self.scenario.counting_type == "line":
+                print(f"[AI Service Log] Frame {self._frame_i:04d} | Đang theo dõi (Tracks): {s.get('tracks')} | IN: {s.get('in')} | OUT: {s.get('out')} | Tốc độ: {s.get('fps')} fps")
+            else:
+                print(f"[AI Service Log] Frame {self._frame_i:04d} | Đang theo dõi (Tracks): {s.get('tracks')} | Đang có trên màn hình: {s.get('in_zone', s.get('in_frame', 0))} | Tốc độ: {s.get('fps')} fps")
+
         return out
 
     # ------------------------------------------------------------------ #
@@ -268,4 +286,19 @@ class StreamingCounter:
             d.update({"in_frame": r.zone_current, "peak": r.zone_peak, "total": r.unique_tracks})
         else:
             d.update({"in_zone": r.zone_current, "zone_peak": r.zone_peak})
+            
+        # Thêm chi tiết output của supervision (tracker_id, class, conf, xyxy)
+        det_list = []
+        if self.last_det is not None:
+            for i in range(len(self.last_det)):
+                tid = self.last_det.tracker_id[i] if self.last_det.tracker_id is not None else "?"
+                cls_name = self.last_det.data["class_name"][i] if (getattr(self.last_det, "data", None) and "class_name" in self.last_det.data) else "obj"
+                conf = float(self.last_det.confidence[i]) if self.last_det.confidence is not None else 0.0
+                # Lấy toạ độ xyxy
+                box = self.last_det.xyxy[i]
+                x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                
+                det_list.append(f"#{tid} {cls_name} ({conf:.2f}) [box: {x1},{y1}→{x2},{y2}]")
+        d["detections"] = det_list
+        
         return d
