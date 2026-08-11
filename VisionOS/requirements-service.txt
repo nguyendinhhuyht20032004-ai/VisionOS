@@ -16,3 +16,4 @@ torch>=2.2
 torchvision>=0.17
 # --- Vector database (ReID / tìm kiếm / lịch sử sự kiện) ---
 qdrant-client>=1.9
+redis>=5.0.0
