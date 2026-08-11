@@ -291,14 +291,19 @@ class StreamingCounter:
         det_list = []
         if self.last_det is not None:
             for i in range(len(self.last_det)):
-                tid = self.last_det.tracker_id[i] if self.last_det.tracker_id is not None else "?"
-                cls_name = self.last_det.data["class_name"][i] if (getattr(self.last_det, "data", None) and "class_name" in self.last_det.data) else "obj"
-                conf = float(self.last_det.confidence[i]) if self.last_det.confidence is not None else 0.0
+                tid = int(self.last_det.tracker_id[i]) if self.last_det.tracker_id is not None else None
+                cls_name = str(self.last_det.data["class_name"][i]) if (getattr(self.last_det, "data", None) and "class_name" in self.last_det.data) else "obj"
+                conf = round(float(self.last_det.confidence[i]), 3) if self.last_det.confidence is not None else 0.0
                 # Lấy toạ độ xyxy
                 box = self.last_det.xyxy[i]
                 x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
                 
-                det_list.append(f"#{tid} {cls_name} ({conf:.2f}) [box: {x1},{y1}→{x2},{y2}]")
+                det_list.append({
+                    "track_id": tid,
+                    "class_name": cls_name,
+                    "confidence": conf,
+                    "bbox": [x1, y1, x2, y2]
+                })
         d["detections"] = det_list
         
         return d
