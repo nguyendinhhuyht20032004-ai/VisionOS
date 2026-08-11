@@ -46,6 +46,7 @@ class StreamWorker(threading.Thread):
         self.redis = redis_cli
         self.running = True
         self._reported_tracks = set()
+        self._track_last_seen = {}  # dict to store last seen time of each track_id
 
         # env vars (đã định nghĩa trong AI_SERVICE_INTEGRATION.md)
         self.reconnect_interval = float(os.getenv("RTSP_RECONNECT_INTERVAL_SEC", "5"))
@@ -138,7 +139,10 @@ class StreamWorker(threading.Thread):
         # 1. Frame result
         boxes = []
         det = self.counter.last_det
+        current_tids = set()
         if det and getattr(det, "data", None):
+            if not hasattr(self, "_track_classes"):
+                self._track_classes = {}
             for i, tid in enumerate(det.tracker_id):
                 if tid is None:
                     continue
@@ -155,10 +159,30 @@ class StreamWorker(threading.Thread):
                     "confidence": float(det.confidence[i]) if hasattr(det, "confidence") and det.confidence is not None else 0.0,
                     "bbox": [x1, y1, w, h],
                 })
+                current_tids.add(tid)
+                self._track_last_seen[tid] = time.time()
+                self._track_classes[tid] = boxes[-1]["class"]
+
                 # Emit start event when a new track appears
                 if tid not in self._reported_tracks:
                     self._reported_tracks.add(tid)
                     self._publish_track_event(str(tid), boxes[-1]["class"], "start")
+            
+            # Emit end events for tracks not seen for 2 seconds
+            now_ts = time.time()
+            ended_tids = []
+            for tid, last_seen in list(self._track_last_seen.items()):
+                if now_ts - last_seen > 2.0:
+                    ended_tids.append(tid)
+            
+            for tid in ended_tids:
+                cls_name = self._track_classes.get(tid, "unknown")
+                self._publish_track_event(str(tid), cls_name, "end")
+                del self._track_last_seen[tid]
+                if tid in self._track_classes:
+                    del self._track_classes[tid]
+                if tid in self._reported_tracks:
+                    self._reported_tracks.remove(tid)
             
             # Emit line crossing events (IN / OUT)
             if hasattr(det, "cross_events"):

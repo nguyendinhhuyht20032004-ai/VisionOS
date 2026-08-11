@@ -63,15 +63,7 @@ except Exception as e:
     redis_client = None
     stream_manager = None
 
-# ---------------------------------------------------------------------------
-# Frame Consumer (BỔ SUNG — chạy song song, không thay thế gì)
-# ---------------------------------------------------------------------------
-try:
-    from .frame_consumer import start_consumer
-    start_consumer()
-    print("✅ FrameConsumer đã khởi động (lắng nghe Redis stream)")
-except Exception as e:
-    print(f"⚠️ FrameConsumer không khởi động được: {e}")
+# FrameConsumer đã được xoá theo kiến trúc mới
 
 # ---------------------------------------------------------------------------
 # Stream Control API (theo AI_SERVICE_INTEGRATION.md)
@@ -104,22 +96,13 @@ def stop_stream(stream_id: str):
     if not stream_manager:
         raise HTTPException(status_code=500, detail="StreamManager/Redis not initialized")
     
-    # [TẮT AI CONSUMER]
-    try:
-        from .frame_consumer import unregister_job, _CONSUMER_JOBS
-        if stream_id in _CONSUMER_JOBS:
-            unregister_job(stream_id)
-    except Exception:
-        pass
+
 
     try:
         stream_manager.stop(stream_id)
         return {"status": "success", "message": f"Stream {stream_id} stopped"}
     except KeyError:
         # Nếu không có trong stream_manager nhưng đã xoá bên AI thành công thì coi như OK
-        from .frame_consumer import _CONSUMER_JOBS
-        if stream_id not in _CONSUMER_JOBS:
-             return {"status": "success", "message": f"AI Consumer {stream_id} stopped"}
         raise HTTPException(status_code=404, detail="Stream not found")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -450,11 +433,7 @@ def job_stats(job_id: str):
 
 @app.post("/api/jobs/{job_id}/stop")
 def stop_job(job_id: str):
-    try:
-        from .frame_consumer import unregister_job
-        unregister_job(job_id)
-    except Exception:
-        pass
+
         
     try:
         _get(job_id).stop()
