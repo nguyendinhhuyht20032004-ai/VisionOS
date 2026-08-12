@@ -40,6 +40,7 @@ rtsp://mediamtx:8554/{stream-path}
   "camera_id": "cam-123",
   "stream_id": "stream-456",
   "frame_timestamp": "2026-08-10T09:15:32.120Z",
+  "resolution": {"width": 960, "height": 540},
   "boxes": [
     {
       "track_id": "trk-abc",
@@ -56,6 +57,7 @@ rtsp://mediamtx:8554/{stream-path}
 - `camera_id`: ID của camera (nhận từ API POST /streams).
 - `stream_id`: ID của luồng đang xử lý (nhận từ API POST /streams).
 - `frame_timestamp`: Thời điểm khung hình được AI xử lý (định dạng ISO-8601).
+- `resolution`: Độ phân giải gốc mà AI dùng để đếm (thường là 960x540). Bạn dùng toạ độ này để scale lại hộp bao (bbox) khi vẽ lên UI.
 - `boxes`: Mảng chứa thông tin tất cả vật thể đang xuất hiện trong khung hình này.
   - `track_id`: ID duy nhất của vật thể (do AI gán để theo dõi sự di chuyển). ID này không đổi khi vật thể di chuyển.
   - `class`: Tên lớp vật thể (ví dụ: `"person"`, `"car"`, `"motorcycle"`).
