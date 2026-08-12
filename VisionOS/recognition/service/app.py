@@ -641,10 +641,8 @@ function resetDraw(){ctype=document.getElementById('ctype').value;pts=[];documen
 function startJob(){
  const s=document.getElementById('source').value; if(!s){msg('Nhập nguồn',1);return;}
   let body={source:s,prompt:document.getElementById('prompt').value,counting_type:ctype,
-    model:'yolo',max_fps:parseFloat(document.getElementById('publish_fps').value)||15,
+    model:'yolo',max_fps:parseFloat(document.getElementById('publish_fps').value)||12,
     detect_every:parseInt(document.getElementById('detect_every').value)||3,
-    publish_fps:parseFloat(document.getElementById('publish_fps').value)||15,
-    track_timeout:parseFloat(document.getElementById('track_timeout').value)||2.0,
     group_label:document.getElementById('grp').checked};
  if(ctype==='line'){ if(pts.length!==2){msg('Hãy VẼ 2 điểm cho vạch.',1);return;} body.line=[pts[0][0],pts[0][1],pts[1][0],pts[1][1]]; }
  else if(ctype==='zone'){ if(pts.length<3){msg('Vẽ ≥3 điểm cho vùng.',1);return;} body.zone=pts; }
