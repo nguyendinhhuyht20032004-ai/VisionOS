@@ -168,31 +168,32 @@ class StreamWorker(threading.Thread):
                     self._reported_tracks.add(tid)
                     self._publish_track_event(str(tid), boxes[-1]["class"], "start")
             
-            # Emit end events for tracks not seen for 2 seconds
-            now_ts = time.time()
-            ended_tids = []
-            for tid, last_seen in list(self._track_last_seen.items()):
-                if now_ts - last_seen > 2.0:
-                    ended_tids.append(tid)
-            
-            for tid in ended_tids:
-                cls_name = self._track_classes.get(tid, "unknown")
-                self._publish_track_event(str(tid), cls_name, "end")
-                del self._track_last_seen[tid]
-                if tid in self._track_classes:
-                    del self._track_classes[tid]
-                if tid in self._reported_tracks:
-                    self._reported_tracks.remove(tid)
-            
-            # Clear line crossing events — IN/OUT không nằm trong enum start|end của spec
-            if hasattr(det, "cross_events"):
-                det.cross_events = []
+        # Emit end events for tracks not seen for 2 seconds
+        now_ts = time.time()
+        ended_tids = []
+        for tid, last_seen in list(self._track_last_seen.items()):
+            if now_ts - last_seen > 2.0:
+                ended_tids.append(tid)
+        
+        for tid in ended_tids:
+            cls_name = self._track_classes.get(tid, "unknown")
+            self._publish_track_event(str(tid), cls_name, "end")
+            del self._track_last_seen[tid]
+            if tid in self._track_classes:
+                del self._track_classes[tid]
+            if tid in self._reported_tracks:
+                self._reported_tracks.remove(tid)
+        
+        # Clear line crossing events — IN/OUT không nằm trong enum start|end của spec
+        if det and hasattr(det, "cross_events"):
+            det.cross_events = []
 
         frame_msg = {
             "type": "frame",
             "camera_id": self.camera_id,
             "stream_id": self.stream_id,
             "frame_timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+            "resolution": {"width": self.counter.w, "height": self.counter.h},
             "boxes": boxes,
         }
         
