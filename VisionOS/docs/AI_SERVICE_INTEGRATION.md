@@ -18,7 +18,8 @@ AI service tự expose 1 HTTP API để backend gọi vào:
     "classes": ["person", "car"],
     "conf": 0.25,
     "detect_every": 3,
-    "track_timeout": 2.0
+    "track_timeout": 2.0,
+    "publish_fps": 10.0
   }
 }
 ```
@@ -29,6 +30,7 @@ AI service tự expose 1 HTTP API để backend gọi vào:
 - `params.conf` (Tùy chọn): Ngưỡng tin cậy của AI (mặc định 0.25).
 - `params.detect_every` (Tùy chọn): Chạy quét hình ảnh (YOLO) sau mỗi N khung hình. Mặc định là `3` (rất mượt). Nếu để `1`, AI sẽ quét liên tục gây nặng CPU.
 - `params.track_timeout` (Tùy chọn): Số giây (thời gian) cho phép mất dấu vật thể trước khi AI quyết định khai tử và bắn sự kiện `end`. Mặc định `2.0`. Mở rộng thời gian này nếu vật thể hay bị khuất sau cây/vật cản.
+- `params.publish_fps` (Tùy chọn): Tần số (khung hình / giây) xuất toạ độ lên Redis. Mặc định `10.0`. Tăng lên `30.0` nếu muốn video Frontend mượt tuyệt đối (tốn băng thông hơn).
 
 **`PATCH /streams/{stream_id}`** — cập nhật `params` của luồng đang chạy (không cần dừng/khởi động lại)
 

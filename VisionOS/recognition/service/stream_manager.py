@@ -28,6 +28,7 @@ class StreamParams(BaseModel):
     classes: Optional[list] = None             # ví dụ ["person","car"]
     detect_every: Optional[int] = Field(3, description="Chạy AI mỗi N frame (tăng để mượt/nhẹ CPU, giảm để chính xác)")
     track_timeout: Optional[float] = Field(2.0, description="Thời gian (giây) mất dấu trước khi bắn sự kiện end")
+    publish_fps: Optional[float] = Field(10.0, description="Tần số gửi kết quả lên Redis (khung hình / giây)")
 
 class StreamControlRequest(BaseModel):
     camera_id: str = Field(..., description="ID camera (định danh người dùng)")
@@ -52,7 +53,6 @@ class StreamWorker(threading.Thread):
 
         # env vars (đã định nghĩa trong AI_SERVICE_INTEGRATION.md)
         self.reconnect_interval = float(os.getenv("RTSP_RECONNECT_INTERVAL_SEC", "5"))
-        self.publish_fps = float(os.getenv("OVERLAY_PUBLISH_FPS", "10"))
         self.maxlen = int(os.getenv("REDIS_STREAM_MAXLEN", "1000"))
         self.stream_key = os.getenv("REDIS_STREAM_KEY", "VISIONOS_RESULTS")
 
@@ -103,10 +103,11 @@ class StreamWorker(threading.Thread):
     # -------------------------------------------------------------------
     def run(self):
         self._open_source()
-        interval = 1.0 / max(self.publish_fps, 1e-3)
         last_pub = 0.0
 
         while self.running:
+            fps = self.params.publish_fps if self.params.publish_fps is not None else float(os.getenv("OVERLAY_PUBLISH_FPS", "10"))
+            interval = 1.0 / max(fps, 1e-3)
             if self.fs is None:
                 time.sleep(self.reconnect_interval)
                 self._open_source()
