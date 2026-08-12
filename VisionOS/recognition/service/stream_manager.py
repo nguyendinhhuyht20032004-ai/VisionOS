@@ -90,7 +90,7 @@ class StreamWorker(threading.Thread):
             detector,
             resolution=scenario.resolution,
             detect_every=self.params.detect_every if self.params.detect_every is not None else 3,
-            smoother_len=int(os.getenv("SMOOTHER_LEN", "2")),
+            smoother_len=int(os.getenv("SMOOTHER_LEN", "5")),
         )
 
     # -------------------------------------------------------------------
@@ -124,14 +124,22 @@ class StreamWorker(threading.Thread):
                     time.sleep(0.1) # Wait for first frame
                 continue
 
+            loop_start = time.time()
+
             # ----- AI pipeline -----
             out = self.counter.process(frame)
-            
+
             # ----- Publish (giới hạn FPS) -----
             now = time.time()
             if now - last_pub >= interval:
                 self._publish_result(out)
                 last_pub = now
+
+            # Pace loop to target FPS — avoid burning CPU on frames we won't publish
+            elapsed = time.time() - loop_start
+            sleep_time = interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         # clean up when stopped
         if self.fs:
