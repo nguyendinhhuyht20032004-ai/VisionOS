@@ -61,9 +61,15 @@ Content-Type: application/json
 
 | Trường | Kiểu | Mô tả |
 |---|---|---|
-| `classes` | `string[]` | Danh sách lớp cần theo dõi. Bỏ qua = theo dõi tất cả 80 lớp COCO. |
-| `conf` | `float` | Ngưỡng confidence (0.0–1.0). Mặc định `0.3`. |
-| `roi` | `number[][]` | Toạ độ vùng quan tâm (% frame 0–100):<br>• **2 điểm** → đếm qua **đường kẻ** (line crossing)<br>• **3+ điểm** → đếm trong **vùng** (polygon zone)<br>• **bỏ qua** → đếm toàn **màn hình** (fullscreen) |
+| `classes` | `string[]` | Danh sách lớp cần theo dõi, VD `["person","car"]`. **Bỏ qua = chỉ theo dõi `person`** (không phải cả 80 lớp COCO). |
+| `conf` | `float` | Ngưỡng confidence (0.0–1.0). Bỏ qua = lấy theo env `YOLO_CONF` (mặc định `0.3`). Xem lưu ý bên dưới. |
+| `roi` | `number[][]` | Toạ độ vùng quan tâm (% frame 0–100):<br>• **2 điểm** → theo dõi qua **đường kẻ** (line crossing)<br>• **3+ điểm** → theo dõi trong **vùng** (polygon zone)<br>• **bỏ qua** → theo dõi toàn **màn hình** (fullscreen) |
+
+> **`conf` chỉ siết lên được, không nới xuống.** Model YOLO được nạp **một lần và dùng chung
+> cho mọi camera** (để tiết kiệm VRAM), chạy ở ngưỡng `YOLO_CONF`. Ngưỡng `conf` của từng
+> luồng được áp dụng bằng cách lọc lại kết quả sau khi nhận diện — nên đặt `conf` **cao hơn**
+> `YOLO_CONF` thì có tác dụng, đặt **thấp hơn** thì không lấy lại được các vật đã bị model
+> loại từ đầu. Cần bắt vật mờ/ở xa thì phải hạ `YOLO_CONF` trong `docker-compose.yml`.
 
 ### Ví dụ các chế độ ROI
 
@@ -100,7 +106,7 @@ Backend đọc bằng lệnh `XREAD`.
 
 ### Cấu trúc message
 
-Mỗi bản ghi trong stream có field `data` chứa chuỗi JSON. Có 2 loại message:
+Mỗi bản ghi trong stream có field `data` chứa chuỗi JSON. Có 3 loại message:
 
 #### `frame` — kết quả phát hiện theo frame
 
@@ -143,6 +149,55 @@ Phát ra khi một đối tượng xuất hiện lần đầu (`start`) hoặc b
 
 > `event` chỉ có: `"start"` hoặc `"end"`.
 
+#### `stream_status` — vòng đời của luồng camera
+
+```json
+{
+  "type":      "stream_status",
+  "camera_id": "cam-01",
+  "stream_id": "entrance-north",
+  "status":    "source_lost",
+  "detail":    "mất kết nối RTSP",
+  "timestamp": "2026-08-12T09:20:11.004Z"
+}
+```
+
+| `status` | Nghĩa |
+|---|---|
+| `started` | AI Service đã nhận việc, đang mở kết nối tới camera |
+| `source_ok` | Đã lấy được frame đầu tiên — camera thực sự chạy |
+| `source_lost` | Mất kết nối RTSP, AI đang tự thử lại |
+| `reconnected` | Kết nối lại được, frame chảy tiếp |
+| `stopped` | Luồng đã dừng |
+
+Không có loại tin này thì backend **không phân biệt được** "camera hỏng" với "đang không có
+ai đi qua" — cả hai đều chỉ là tin ngừng chảy.
+
+**Khi camera chết, AI ngừng hẳn việc bắn tin `frame`.** Trước đây bộ đọc RTSP giữ lại ảnh
+cuối trong bộ nhớ nên AI vẫn nhận diện trên ảnh đông cứng và bắn tin đều đặn — đo thực tế:
+camera tắt lúc 04:30:10 mà tin vẫn chảy tới 04:30:55, lặp đi lặp lại y hệt 31 khung bao ở
+nguyên vị trí cũ. Backend sẽ hiển thị "31 người" vĩnh viễn trên một camera đã chết. Giờ AI coi là mất nguồn
+khi quá `SOURCE_STALE_SEC` giây (mặc định 5) không có ảnh mới, và im lặng cho tới khi có ảnh
+thật trở lại.
+
+> Mọi camera cùng ghi vào một stream Redis → backend **phải lọc theo `camera_id` hoặc
+> `stream_id`**, nếu không sẽ lẫn tin của camera khác.
+
+### Hai Redis Stream
+
+| Stream | Chứa gì | Giữ được bao lâu |
+|---|---|---|
+| `VISIONOS_RESULTS` | **Tất cả** — `frame` + `track_event` + `stream_status` | ngắn: `frame` bắn 10 tin/giây nên đẩy tin cũ đi rất nhanh |
+| `VISIONOS_EVENTS` | **Chỉ tin nghiệp vụ** — `track_event` + `stream_status` | dài: mặc định 50 000 bản ghi |
+
+Đo thực tế với `REDIS_STREAM_MAXLEN=1000` và **một** camera: `VISIONOS_RESULTS` chỉ giữ được
+**2 phút 27 giây**, và toàn bộ `track_event` đã bị đẩy khỏi cửa sổ — chỉ còn `frame`. Với 4
+camera thì còn khoảng 37 giây.
+
+**Khuyến nghị:** đọc `VISIONOS_RESULTS` để vẽ khung bao realtime, và đọc `VISIONOS_EVENTS`
+để ghi dữ liệu nghiệp vụ vào DB. Tin nghiệp vụ có ở cả hai stream nên nếu chỉ cần một luồng
+đơn giản thì đọc `VISIONOS_RESULTS` như cũ vẫn chạy.
+
 ### Cách đọc Redis Stream
 
 Dùng `XREAD` với `block` để không cần polling:
@@ -154,6 +209,20 @@ XREAD BLOCK 5000 COUNT 20 STREAMS VISIONOS_RESULTS <last_id>
 - `last_id = "$"` → chỉ đọc message MỚI từ thời điểm gọi trở đi.
 - `last_id = "0"` → đọc TẤT CẢ từ đầu (kể cả message cũ còn trong stream).
 - Lưu `entry_id` của bản ghi cuối cùng đọc được để dùng làm `last_id` cho lần sau.
+
+> ⚠️ **`$` sẽ làm mất dữ liệu khi backend khởi động lại.** `$` nghĩa là "bỏ qua mọi thứ
+> trước thời điểm này" — deploy lại backend 1 phút là mất trắng 1 phút sự kiện. Muốn không
+> mất thì backend phải tự lưu `entry_id` cuối cùng vào DB và đọc tiếp từ đó, hoặc dùng
+> **consumer group** để Redis nhớ hộ:
+>
+> ```
+> XGROUP CREATE VISIONOS_EVENTS backend-main 0 MKSTREAM
+> XREADGROUP GROUP backend-main worker-1 BLOCK 5000 COUNT 20 STREAMS VISIONOS_EVENTS >
+> XACK VISIONOS_EVENTS backend-main <entry_id>     # sau khi ghi DB xong
+> ```
+>
+> Redis giữ danh sách tin chưa `XACK`, backend chết giữa chừng bật lại vẫn nhận lại được.
+> Đây là cách nên dùng cho dữ liệu nghiệp vụ.
 
 ---
 
@@ -174,7 +243,11 @@ Content-Type: application/json
 }
 ```
 
-Chỉ cần truyền những trường muốn thay đổi. AI Service rebuild `StreamingCounter` ngay lập tức.
+Chỉ cần truyền những trường muốn thay đổi — các trường không gửi vẫn giữ nguyên.
+
+> ⚠️ **`PATCH` khởi động lại việc theo dõi.** Tracker được dựng lại nên `track_id` đánh lại từ
+> đầu. Trước khi dựng lại, AI bắn `track_event` kiểu `end` cho toàn bộ track đang mở — không
+> đóng thì backend treo track cũ vĩnh viễn rồi lại nhận đúng những id đó từ tracker mới.
 
 ---
 
@@ -448,10 +521,10 @@ func main() {
 ## Tóm tắt nhanh
 
 ```
-1. POST /streams/{id}    body: {camera_id, rtsp_url, params}   → bắt đầu
-2. XREAD VISIONOS_RESULTS $                                     → đọc kết quả liên tục
-3. PATCH /streams/{id}   body: {classes, conf, roi}            → đổi tham số
-4. DELETE /streams/{id}                                         → dừng
+1. POST   /streams/{id}               body: {camera_id, rtsp_url, params}  → bắt đầu
+2. XREAD  VISIONOS_RESULTS $                                                → đọc kết quả liên tục
+3. PATCH  /streams/{id}               body: {classes, conf, roi}            → đổi tham số
+4. DELETE /streams/{id}                                                     → dừng
 ```
 
 Backend không cần biết gì về YOLO, ByteTrack, hay MediaMTX — chỉ cần HTTP + Redis.

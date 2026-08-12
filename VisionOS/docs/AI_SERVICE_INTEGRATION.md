@@ -60,7 +60,7 @@ rtsp://mediamtx:8554/{stream-path}
   - `track_id`: ID duy nhất của vật thể (do AI gán để theo dõi sự di chuyển). ID này không đổi khi vật thể di chuyển.
   - `class`: Tên lớp vật thể (ví dụ: `"person"`, `"car"`, `"motorcycle"`).
   - `confidence`: Độ tin cậy của nhận diện (0.0 đến 1.0).
-  - `bbox`: Mảng 4 phần tử `[x, y, w, h]` thể hiện toạ độ góc trên bên trái (`x`, `y`) và chiều rộng `w`, chiều cao `h` của bounding box (đơn vị pixel).
+  - `bbox`: Mảng 4 phần tử `[x, y, w, h]` thể hiện toạ độ góc trên bên trái (`x`, `y`) và chiều rộng `w`, chiều cao `h` của bounding box (đơn vị pixel, theo frame xử lý 960×540).
 
 ### 3.2 Track event (Sự kiện Xuất hiện / Biến mất)
 
@@ -85,6 +85,33 @@ rtsp://mediamtx:8554/{stream-path}
   - `"end"`: Vật thể đã đi ra khỏi khung hình hoặc bị khuất tầm nhìn (mất dấu quá 2 giây).
 - `timestamp`: Thời điểm sự kiện xảy ra (định dạng ISO-8601).
 
+### 3.3 Stream status (Vòng đời luồng camera)
+
+```json
+{
+  "type": "stream_status",
+  "camera_id": "cam-123",
+  "stream_id": "stream-456",
+  "status": "source_lost",
+  "detail": "mất kết nối RTSP",
+  "timestamp": "2026-08-10T09:20:11.004Z"
+}
+```
+
+- `status`: `started` (nhận việc) · `source_ok` (có frame đầu tiên) · `source_lost` (rớt RTSP)
+  · `reconnected` (nối lại được) · `stopped` (đã dừng).
+- Không có tin này thì backend không phân biệt được camera hỏng với việc không có ai đi qua.
+
+### 3.4 Hai stream
+
+| Stream | Nội dung | Vì sao |
+|---|---|---|
+| `REDIS_STREAM_KEY` (`VISIONOS_RESULTS`) | tất cả: `frame` + `track_event` + `stream_status` | giữ nguyên hợp đồng cũ |
+| `REDIS_EVENT_STREAM_KEY` (`VISIONOS_EVENTS`) | chỉ `track_event` + `stream_status` | `frame` 10 tin/giây đẩy tin nghiệp vụ khỏi stream chính sau ~2 phút |
+
+Backend nên đọc `VISIONOS_EVENTS` bằng **consumer group** cho dữ liệu nghiệp vụ, và
+`VISIONOS_RESULTS` bằng `XREAD` cho phần vẽ khung bao realtime.
+
 ## 4. Tham số Docker (ENV)
 
 | ENV | Bắt buộc | Ý nghĩa |
@@ -95,4 +122,6 @@ rtsp://mediamtx:8554/{stream-path}
 | `RTSP_TRANSPORT` | tuỳ chọn | mặc định `tcp` |
 | `RTSP_RECONNECT_INTERVAL_SEC` | tuỳ chọn | thời gian chờ trước khi kết nối lại khi luồng rớt |
 | `OVERLAY_PUBLISH_FPS` | tuỳ chọn | giới hạn tần suất publish frame result |
-| `REDIS_STREAM_MAXLEN` | tuỳ chọn | trần độ dài stream |
+| `REDIS_STREAM_MAXLEN` | tuỳ chọn | trần độ dài stream chính (mặc định 10000 ≈ 25 phút/camera) |
+| `REDIS_EVENT_STREAM_KEY` | tuỳ chọn | stream riêng cho tin nghiệp vụ, mặc định `VISIONOS_EVENTS` |
+| `REDIS_EVENT_STREAM_MAXLEN` | tuỳ chọn | trần độ dài stream nghiệp vụ (mặc định 50000) |
