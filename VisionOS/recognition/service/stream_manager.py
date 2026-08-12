@@ -28,7 +28,7 @@ class StreamParams(BaseModel):
     classes: Optional[list] = None             # ví dụ ["person","car"]
     detect_every: Optional[int] = Field(3, description="Chạy AI mỗi N frame (tăng để mượt/nhẹ CPU, giảm để chính xác)")
     track_timeout: Optional[float] = Field(2.0, description="Thời gian (giây) mất dấu trước khi bắn sự kiện end")
-    publish_fps: Optional[float] = Field(10.0, description="Tần số gửi kết quả lên Redis (khung hình / giây)")
+    publish_fps: Optional[float] = Field(12.0, description="Tần số gửi kết quả lên Redis (khung hình / giây)")
 
 class StreamControlRequest(BaseModel):
     camera_id: str = Field(..., description="ID camera (định danh người dùng)")
@@ -106,7 +106,7 @@ class StreamWorker(threading.Thread):
         last_pub = 0.0
 
         while self.running:
-            fps = self.params.publish_fps if self.params.publish_fps is not None else float(os.getenv("OVERLAY_PUBLISH_FPS", "10"))
+            fps = self.params.publish_fps if self.params.publish_fps is not None else float(os.getenv("OVERLAY_PUBLISH_FPS", "12"))
             interval = 1.0 / max(fps, 1e-3)
             if self.fs is None:
                 time.sleep(self.reconnect_interval)

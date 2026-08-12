@@ -589,8 +589,9 @@ _INDEX_HTML = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
     <option value="zone">Trong VÙNG (vẽ đa giác)</option>
     <option value="fullscreen">Toàn màn hình (không cần vẽ)</option>
   </select>
-  <label>max_fps (cao hơn = mượt hơn nếu CPU kịp)</label><input id="fps" value="12">
-  <label>Detect mỗi N frame (1 = mượt/đều nhất; tăng = nhanh hơn nhưng có thể giật hơn)</label><input id="dev" value="1">
+  <label>Publish FPS — số lần gửi kết quả lên Redis mỗi giây (cao = mượt hơn, tốn CPU hơn)</label><input id="publish_fps" value="12" type="number" min="1" max="60">
+  <label>Detect mỗi N frame — 1 = chính xác nhất; 3-5 = nhẹ CPU, mượt hơn</label><input id="detect_every" value="3" type="number" min="1" max="30">
+  <label>Track timeout (giây) — thời gian mất dấu trước khi AI khai tử vật thể</label><input id="track_timeout" value="2.0" type="number" min="0.5" max="30" step="0.5">
   <button onclick="startJob()">▶ Bắt đầu đếm</button>
   <button class="stop" onclick="stopJob()">■ Dừng</button>
   <button class="warn" onclick="resetDraw()">↺ Vẽ lại</button>
@@ -639,10 +640,12 @@ cv.addEventListener('click',e=>{
 function resetDraw(){ctype=document.getElementById('ctype').value;pts=[];document.getElementById('view').style.display='none';cv.style.display='';redraw();}
 function startJob(){
  const s=document.getElementById('source').value; if(!s){msg('Nhập nguồn',1);return;}
- let body={source:s,prompt:document.getElementById('prompt').value,counting_type:ctype,
-   model:'yolo',max_fps:parseFloat(document.getElementById('fps').value)||12,
-   detect_every:parseInt(document.getElementById('dev').value)||1,
-   group_label:document.getElementById('grp').checked};
+  let body={source:s,prompt:document.getElementById('prompt').value,counting_type:ctype,
+    model:'yolo',max_fps:parseFloat(document.getElementById('publish_fps').value)||15,
+    detect_every:parseInt(document.getElementById('detect_every').value)||3,
+    publish_fps:parseFloat(document.getElementById('publish_fps').value)||15,
+    track_timeout:parseFloat(document.getElementById('track_timeout').value)||2.0,
+    group_label:document.getElementById('grp').checked};
  if(ctype==='line'){ if(pts.length!==2){msg('Hãy VẼ 2 điểm cho vạch.',1);return;} body.line=[pts[0][0],pts[0][1],pts[1][0],pts[1][1]]; }
  else if(ctype==='zone'){ if(pts.length<3){msg('Vẽ ≥3 điểm cho vùng.',1);return;} body.zone=pts; }
  msg('Đang tạo job…');
