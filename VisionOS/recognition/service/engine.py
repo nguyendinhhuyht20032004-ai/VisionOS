@@ -38,7 +38,7 @@ class StreamingCounter:
 
         # ByteTrack (fallback theo phiên bản) — bám dai để đỡ đứt track = đỡ bỏ sót.
         self.tracker = None
-        for kw in (dict(track_activation_threshold=track_thresh, minimum_consecutive_frames=3,
+        for kw in (dict(track_activation_threshold=track_thresh, minimum_consecutive_frames=1,
                         lost_track_buffer=120),
                    dict(track_thresh=track_thresh), {}):
             try:
