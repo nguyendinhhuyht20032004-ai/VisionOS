@@ -21,7 +21,13 @@ services:
       - RTSP_TRANSPORT=tcp
       - RTSP_RECONNECT_INTERVAL_SEC=5
       - OVERLAY_PUBLISH_FPS=10
-      - REDIS_STREAM_MAXLEN=1000
+      # 1000 bản ghi chỉ giữ ~2,5 phút với MỘT camera (frame bắn 10 tin/giây) →
+      # backend khởi động lại lâu hơn thế là mất dữ liệu. 10000 ≈ 25 phút/camera.
+      - REDIS_STREAM_MAXLEN=10000
+      # Stream RIÊNG cho tin nghiệp vụ (track_event, stream_status) — không bị
+      # frame đẩy văng. Backend nên đọc stream này để không bỏ sót sự kiện.
+      - REDIS_EVENT_STREAM_KEY=VISIONOS_EVENTS
+      - REDIS_EVENT_STREAM_MAXLEN=50000
       - YOLO_WEIGHTS=yolov8n.pt   # nhẹ nhất → realtime CPU
       - YOLO_IMGSZ=640            # ảnh nhỏ → nhanh (1280 cần GPU)
       - YOLO_CONF=0.3             # ngưỡng cao hơn → ít box mờ/nhầm car↔truck

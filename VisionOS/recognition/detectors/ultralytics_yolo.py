@@ -121,15 +121,37 @@ class UltralyticsYoloDetector:
             return hf_hub_download(repo_id=repo_id, filename=filename)
         return w
 
+    @staticmethod
+    def _classes_for_token(token: str) -> Set[str]:
+        """Tập lớp COCO của MỘT từ khoá: khớp đúng tên trước, không có thì khớp chứa."""
+        exact = COCO_ALIASES.get(token)
+        if exact:
+            return set(exact)
+        for key, classes in COCO_ALIASES.items():   # prompt kiểu "đếm người đi bộ"
+            if key in token:
+                return set(classes)
+        return {token}
+
     def _wanted_classes(self, prompt: str) -> Set[str]:
-        """Suy ra tập lớp COCO cần giữ từ prompt (khớp COCO_ALIASES của YOLO-NAS)."""
+        """Suy ra tập lớp COCO cần giữ từ prompt (khớp COCO_ALIASES của YOLO-NAS).
+
+        Prompt có thể gồm NHIỀU lớp ngăn bằng dấu phẩy — Control API nối
+        ``params.classes`` lại theo kiểu đó (``["person","car"]`` → ``"person,car"``).
+        Phải tách rồi HỢP tập lớp của từng phần.
+
+        Bản cũ trả về ngay tại tên khớp đầu tiên trên CẢ chuỗi, mà "person" đứng đầu
+        bảng alias → ``"person,car"`` và cả ``"car,person"`` đều chỉ ra person,
+        ``"car,truck"`` chỉ ra car. Lớp bị bỏ âm thầm, không lỗi, không cảnh báo.
+        """
         if self.want:
             return self.want
-        p = prompt.lower().strip()
-        for key, classes in COCO_ALIASES.items():
-            if key in p:
-                return set(classes)
-        return {p}
+        p = str(prompt).lower().strip()
+        wanted: Set[str] = set()
+        for token in p.split(","):
+            token = token.strip()
+            if token:
+                wanted |= self._classes_for_token(token)
+        return wanted or {p}
 
     @staticmethod
     def _iou(a, b) -> float:

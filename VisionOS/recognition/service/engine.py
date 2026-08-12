@@ -22,7 +22,7 @@ class StreamingCounter:
 
     def __init__(self, scenario, detector, resolution: Optional[Tuple[int, int]] = None,
                  track_thresh: float = 0.1, smoother_len: int = 8, detect_every: int = 1,
-                 merge_label: Optional[str] = None):
+                 merge_label: Optional[str] = None, min_confidence: Optional[float] = None):
         import warnings
 
         import numpy as np
@@ -117,6 +117,11 @@ class StreamingCounter:
         # merge_label: gộp MỌI vật về 1 nhãn (vd "vehicle") — tùy chọn khi muốn đếm gộp phương
         # tiện thành 1 loại (bỏ tick trên web = giữ phân loại car/truck/bus, mỗi loại 1 màu).
         self.merge_label = merge_label
+        # Ngưỡng tin cậy RIÊNG của luồng này. Detector là đối tượng DÙNG CHUNG (cache toàn
+        # cục để đỡ VRAM) nên không thể đổi ngưỡng của nó cho từng camera — camera thứ hai
+        # xin conf khác sẽ bị bỏ qua hoàn toàn. Vì vậy lọc lại ở đây, sau khi detect.
+        # Lưu ý: chỉ SIẾT lên được, không nới xuống dưới ngưỡng YOLO_CONF của detector.
+        self.min_confidence = min_confidence
 
     # ------------------------------------------------------------------ #
     def process(self, frame_bgr):
@@ -136,6 +141,8 @@ class StreamingCounter:
             t0 = time.time()
             dr = self.detector.detect(frame_bgr, self.scenario.prompt)
             self._last_latency_ms = (time.time() - t0) * 1000
+            if self.min_confidence is not None:
+                dr = dr.filter_confidence(self.min_confidence)
             self.result.total_detections += len(dr.detections)
 
             det = _to_sv(dr.detections, sv, np)

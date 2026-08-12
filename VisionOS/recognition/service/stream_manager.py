@@ -21,6 +21,16 @@ from .camera import FrameSource
 # ---------------------------------------------------------------------------
 # Pydantic models cho Control API
 # ---------------------------------------------------------------------------
+def _now_iso() -> str:
+    """Mốc thời gian UTC ISO-8601 có mili-giây: ``2026-08-12T09:15:32.450Z``."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _dump(model: BaseModel, **kw) -> dict:
+    """Đổi model → dict. Hỗ trợ cả pydantic v2 (``model_dump``) lẫn v1 (``dict``)."""
+    return model.model_dump(**kw) if hasattr(model, "model_dump") else model.dict(**kw)
+
+
 class StreamParams(BaseModel):
     """Các tham số tùy chọn khi tạo / cập nhật stream."""
     roi: Optional[list] = None                 # [[x1,y1], [x2,y2]] – không dùng trong demo hiện tại
@@ -47,12 +57,18 @@ class StreamWorker(threading.Thread):
         self.running = True
         self._reported_tracks = set()
         self._track_last_seen = {}  # dict to store last seen time of each track_id
+        self._track_classes = {}    # track_id → class_name (giữ để bắn "end" đúng lớp)
 
         # env vars (đã định nghĩa trong AI_SERVICE_INTEGRATION.md)
         self.reconnect_interval = float(os.getenv("RTSP_RECONNECT_INTERVAL_SEC", "5"))
         self.publish_fps = float(os.getenv("OVERLAY_PUBLISH_FPS", "10"))
         self.maxlen = int(os.getenv("REDIS_STREAM_MAXLEN", "1000"))
         self.stream_key = os.getenv("REDIS_STREAM_KEY", "VISIONOS_RESULTS")
+        # Stream RIÊNG cho tin nghiệp vụ (track_event, stream_status). Stream chính bị
+        # `frame` 10 tin/giây đẩy văng chỉ sau ~2 phút, mà `frame` mất được còn tin
+        # nghiệp vụ thì không. Stream chính VẪN nhận đủ mọi loại tin như cũ.
+        self.event_stream_key = os.getenv("REDIS_EVENT_STREAM_KEY", "VISIONOS_EVENTS")
+        self.event_maxlen = int(os.getenv("REDIS_EVENT_STREAM_MAXLEN", "50000"))
 
         self._build_counter()
         self.fs: Optional[FrameSource] = None
@@ -61,7 +77,8 @@ class StreamWorker(threading.Thread):
     def _build_counter(self):
         # Prompt = các class được join bằng ','
         prompt = ",".join(self.params.classes) if self.params.classes else "person"
-        conf = self.params.conf or 0.25
+        # `or 0.25` cũ vừa bỏ qua env YOLO_CONF vừa hiểu sai conf=0.0 thành 0.25.
+        conf = self.params.conf if self.params.conf is not None else float(os.getenv("YOLO_CONF", "0.3"))
 
         # Determine counting type from ROI
         counting_type = "fullscreen"
@@ -89,6 +106,7 @@ class StreamWorker(threading.Thread):
             resolution=scenario.resolution,
             detect_every=1,
             smoother_len=int(os.getenv("SMOOTHER_LEN", "2")),
+            min_confidence=conf,      # detector dùng chung → phải lọc lại theo từng luồng
         )
 
     # -------------------------------------------------------------------
@@ -100,9 +118,18 @@ class StreamWorker(threading.Thread):
 
     # -------------------------------------------------------------------
     def run(self):
+        self._publish_status("started")
         self._open_source()
         interval = 1.0 / max(self.publish_fps, 1e-3)
         last_pub = 0.0
+        source_ok = False        # đang nhận được frame MỚI hay không
+        ever_ok = False          # đã từng nhận được frame (để phân biệt lần đầu ↔ nối lại)
+        lost_announced = False   # đã báo source_lost cho lần rớt này chưa (chống spam)
+        # FrameSource giữ frame CŨ trong bộ nhớ và tự kết nối lại ngầm, nên khi camera
+        # chết thì read() vẫn trả ảnh (đứng hình) và .alive vẫn True → không thể dựa vào
+        # hai thứ đó. Bám theo bộ đếm frames_read mới biết có ảnh MỚI thật hay không.
+        stale_after = float(os.getenv("SOURCE_STALE_SEC", "5"))
+        last_frames_read, last_new_t = -1, time.time()
 
         while self.running:
             if self.fs is None:
@@ -114,11 +141,45 @@ class StreamWorker(threading.Thread):
             if frame is None:
                 if not self.fs.alive:
                     print(f"[StreamWorker] {self.stream_id} thread dead, reconnecting...", flush=True)
+                    # Báo MỘT lần cho mỗi lần rớt — kể cả khi chưa từng kết nối được.
+                    # Nếu chỉ báo khi đã từng có frame thì camera sai URL / chưa bật sẽ
+                    # im lặng mãi, backend không biết vì sao không có dữ liệu.
+                    if not lost_announced:
+                        lost_announced = True
+                        source_ok = False
+                        self._publish_status(
+                            "source_lost",
+                            "mất kết nối RTSP" if ever_ok else "không kết nối được RTSP")
                     self.fs.stop()
                     self.fs = None
                     time.sleep(self.reconnect_interval)
                 else:
                     time.sleep(0.1) # Wait for first frame
+                if not lost_announced and time.time() - last_new_t > stale_after:
+                    lost_announced = True
+                    self._publish_status("source_lost", "không kết nối được RTSP")
+                continue
+
+            # ----- Ảnh này có MỚI không? -----
+            fr_read = getattr(self.fs, "frames_read", 0)
+            now = time.time()
+            if fr_read != last_frames_read:
+                last_frames_read, last_new_t = fr_read, now
+                if not source_ok:                       # camera (lại) chạy
+                    source_ok, lost_announced = True, False
+                    self._publish_status("reconnected" if ever_ok else "source_ok")
+                    ever_ok = True
+            elif source_ok and now - last_new_t > stale_after:
+                source_ok = False
+                if not lost_announced:
+                    lost_announced = True
+                    self._publish_status("source_lost",
+                                         f"không có frame mới trong {stale_after:.0f}s")
+
+            if not source_ok:
+                # Ảnh đã ĐỨNG HÌNH — tuyệt đối không publish detection nữa, nếu không
+                # backend thấy "31 người" đứng yên vĩnh viễn trên một camera đã chết.
+                time.sleep(0.1)
                 continue
 
             # ----- AI pipeline -----
@@ -133,16 +194,15 @@ class StreamWorker(threading.Thread):
         # clean up when stopped
         if self.fs:
             self.fs.stop()
+        self._publish_status("stopped")
 
     # -------------------------------------------------------------------
     def _publish_result(self, annotated_bgr):
         # 1. Frame result
         boxes = []
         det = self.counter.last_det
-        current_tids = set()
-        if det and getattr(det, "data", None):
-            if not hasattr(self, "_track_classes"):
-                self._track_classes = {}
+        if det is not None and len(det) > 0 and det.tracker_id is not None:
+            has_cls = bool(getattr(det, "data", None)) and "class_name" in det.data
             for i, tid in enumerate(det.tracker_id):
                 if tid is None:
                     continue
@@ -155,11 +215,10 @@ class StreamWorker(threading.Thread):
                 h = y2 - y1
                 boxes.append({
                     "track_id": str(tid),
-                    "class": str(det.data.get("class_name")[i]) if "class_name" in det.data and len(det.data["class_name"]) > i else "",
+                    "class": str(det.data["class_name"][i]) if has_cls and len(det.data["class_name"]) > i else "",
                     "confidence": float(det.confidence[i]) if hasattr(det, "confidence") and det.confidence is not None else 0.0,
                     "bbox": [x1, y1, w, h],
                 })
-                current_tids.add(tid)
                 self._track_last_seen[tid] = time.time()
                 self._track_classes[tid] = boxes[-1]["class"]
 
@@ -167,63 +226,81 @@ class StreamWorker(threading.Thread):
                 if tid not in self._reported_tracks:
                     self._reported_tracks.add(tid)
                     self._publish_track_event(str(tid), boxes[-1]["class"], "start")
-            
-            # Emit end events for tracks not seen for 2 seconds
-            now_ts = time.time()
-            ended_tids = []
-            for tid, last_seen in list(self._track_last_seen.items()):
-                if now_ts - last_seen > 2.0:
-                    ended_tids.append(tid)
-            
-            for tid in ended_tids:
-                cls_name = self._track_classes.get(tid, "unknown")
-                self._publish_track_event(str(tid), cls_name, "end")
-                del self._track_last_seen[tid]
-                if tid in self._track_classes:
-                    del self._track_classes[tid]
-                if tid in self._reported_tracks:
-                    self._reported_tracks.remove(tid)
-            
-            # Clear line crossing events — IN/OUT không nằm trong enum start|end của spec
-            if hasattr(det, "cross_events"):
-                det.cross_events = []
+
+        # Emit end events for tracks not seen for 2 seconds.
+        # PHẢI nằm NGOÀI khối trên: khung hình TRỐNG (len(det)==0) mới đúng là lúc cần
+        # bắn "end" nhất. Để bên trong thì mọi vật rời khỏi khung = không track nào kết
+        # thúc, backend treo track vĩnh viễn.
+        now_ts = time.time()
+        ended_tids = [tid for tid, last_seen in list(self._track_last_seen.items())
+                      if now_ts - last_seen > 2.0]
+        for tid in ended_tids:
+            cls_name = self._track_classes.pop(tid, "unknown")
+            self._publish_track_event(str(tid), cls_name, "end")
+            del self._track_last_seen[tid]
+            self._reported_tracks.discard(tid)
+
+        # Clear line crossing events — IN/OUT không nằm trong enum start|end của spec
+        if det is not None and hasattr(det, "cross_events"):
+            det.cross_events = []
 
         frame_msg = {
             "type": "frame",
             "camera_id": self.camera_id,
             "stream_id": self.stream_id,
-            "frame_timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+            "frame_timestamp": _now_iso(),
             "boxes": boxes,
         }
         
-        try:
-            self.redis.xadd(
-                self.stream_key,
-                {"data": json.dumps(frame_msg)},
-                maxlen=self.maxlen,
-                approximate=True,
-            )
-            print(f"[StreamWorker] {self.stream_id} published frame with {len(boxes)} boxes", flush=True)
-        except Exception as e:
-            print(f"[StreamWorker] {self.stream_id} failed to publish to Redis: {e}", flush=True)
+        self._publish(frame_msg)
+        print(f"[StreamWorker] {self.stream_id} published frame with {len(boxes)} boxes", flush=True)
+
+    # -------------------------------------------------------------------
+    def _publish(self, msg: dict, durable: bool = False):
+        """Đẩy 1 message lên Redis. ``durable`` = gửi kèm sang stream bền.
+
+        Stream chính (``REDIS_STREAM_KEY``) nhận MỌI loại tin, y như trước — backend
+        đang chạy không phải sửa gì. Tin nghiệp vụ đi THÊM vào stream bền để không bị
+        `frame` đẩy văng sau vài phút.
+        """
+        payload = {"data": json.dumps(msg)}
+        targets = [(self.stream_key, self.maxlen)]
+        if durable:
+            targets.append((self.event_stream_key, self.event_maxlen))
+        for key, maxlen in targets:
+            try:
+                self.redis.xadd(key, payload, maxlen=maxlen, approximate=True)
+            except Exception as e:
+                print(f"[StreamWorker] {self.stream_id} publish lên '{key}' lỗi: {e}", flush=True)
+
+    # -------------------------------------------------------------------
+    def _publish_status(self, status: str, detail: str = ""):
+        """Báo vòng đời luồng: started · source_ok · source_lost · reconnected · stopped.
+
+        Không có tin này thì backend không phân biệt được "camera chết" với "đang
+        không có ai đi qua" — cả hai đều chỉ là tin ngừng chảy.
+        """
+        print(f"[StreamWorker] {self.stream_id} status={status} {detail}".rstrip(), flush=True)
+        self._publish({
+            "type": "stream_status",
+            "camera_id": self.camera_id,
+            "stream_id": self.stream_id,
+            "status": status,
+            "detail": detail,
+            "timestamp": _now_iso(),
+        }, durable=True)
 
     # -------------------------------------------------------------------
     def _publish_track_event(self, track_id: str, class_name: str, event: str):
-        ev = {
+        self._publish({
             "type": "track_event",
             "camera_id": self.camera_id,
             "stream_id": self.stream_id,
             "track_id": track_id,
             "class": class_name,
             "event": event,
-            "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-        }
-        self.redis.xadd(
-            self.stream_key,
-            {"data": json.dumps(ev)},
-            maxlen=self.maxlen,
-            approximate=True,
-        )
+            "timestamp": _now_iso(),
+        }, durable=True)
 
     # -------------------------------------------------------------------
     def stop(self):
@@ -233,7 +310,26 @@ class StreamWorker(threading.Thread):
 
     # -------------------------------------------------------------------
     def update_params(self, params: StreamParams):
-        self.params = params
+        """PATCH = cập nhật MỘT PHẦN — chỉ ghi đè trường backend thực sự gửi lên.
+
+        Gán đè nguyên khối sẽ xoá mất ``classes``/``roi`` cũ khi backend chỉ gửi mỗi
+        ``conf`` → luồng âm thầm nhảy từ đếm-vạch về fullscreen, prompt về "person".
+        BACKEND_INTEGRATION.md §4 hứa "chỉ cần truyền những trường muốn thay đổi".
+        Gửi tường minh ``null`` (vd ``{"roi": null}``) vẫn xoá được — vì
+        ``exclude_unset`` phân biệt "không gửi" với "gửi null".
+        """
+        merged = _dump(self.params)
+        merged.update(_dump(params, exclude_unset=True))
+        self.params = StreamParams(**merged)
+
+        # Dựng lại counter = tracker MỚI TINH, track_id đánh lại từ 1. Phải đóng vòng đời
+        # track cũ trước — không thì backend treo track không bao giờ kết thúc, rồi lại
+        # nhận đúng những track_id đó từ tracker mới (trùng id, sai dữ liệu).
+        for tid in list(self._reported_tracks):
+            self._publish_track_event(str(tid), self._track_classes.get(tid, "unknown"), "end")
+        self._reported_tracks.clear()
+        self._track_last_seen.clear()
+        self._track_classes.clear()
         self._build_counter()
 
 # ---------------------------------------------------------------------------
