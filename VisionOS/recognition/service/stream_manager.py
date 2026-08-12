@@ -26,6 +26,8 @@ class StreamParams(BaseModel):
     roi: Optional[list] = None                 # [[x1,y1], [x2,y2]] – không dùng trong demo hiện tại
     conf: Optional[float] = None               # confidence threshold
     classes: Optional[list] = None             # ví dụ ["person","car"]
+    detect_every: Optional[int] = Field(3, description="Chạy AI mỗi N frame (tăng để mượt/nhẹ CPU, giảm để chính xác)")
+    track_timeout: Optional[float] = Field(2.0, description="Thời gian (giây) mất dấu trước khi bắn sự kiện end")
 
 class StreamControlRequest(BaseModel):
     camera_id: str = Field(..., description="ID camera (định danh người dùng)")
@@ -87,7 +89,7 @@ class StreamWorker(threading.Thread):
             scenario,
             detector,
             resolution=scenario.resolution,
-            detect_every=1,
+            detect_every=self.params.detect_every if self.params.detect_every is not None else 3,
             smoother_len=int(os.getenv("SMOOTHER_LEN", "2")),
         )
 
@@ -172,7 +174,8 @@ class StreamWorker(threading.Thread):
         now_ts = time.time()
         ended_tids = []
         for tid, last_seen in list(self._track_last_seen.items()):
-            if now_ts - last_seen > 2.0:
+            timeout = self.params.track_timeout if self.params.track_timeout is not None else 2.0
+            if now_ts - last_seen > timeout:
                 ended_tids.append(tid)
         
         for tid in ended_tids:

@@ -12,11 +12,23 @@ AI service tự expose 1 HTTP API để backend gọi vào:
 
 ```json
 {
-  "camera_id": "cam-123",
-  "rtsp_url": "rtsp://mediamtx:8554/camera-3-main",
-  "params": { "roi": [[x1, y1], [x2, y2]], "conf": 0.3, "classes": ["person", "car"] }
+  "camera_id": "cam-1",
+  "rtsp_url": "rtsp://mediamtx:8554/cam-1",
+  "params": {
+    "classes": ["person", "car"],
+    "conf": 0.25,
+    "detect_every": 3,
+    "track_timeout": 2.0
+  }
 }
 ```
+
+- `camera_id` (Bắt buộc): Chuỗi định danh camera do Backend quy định.
+- `rtsp_url` (Bắt buộc): Link RTSP nội bộ cấp bởi MediaMTX.
+- `params.classes` (Tùy chọn): Mảng tên tiếng Anh của vật thể cần đếm. Khuyên dùng: `["person", "car", "truck", "motorcycle", "bus"]`.
+- `params.conf` (Tùy chọn): Ngưỡng tin cậy của AI (mặc định 0.25).
+- `params.detect_every` (Tùy chọn): Chạy quét hình ảnh (YOLO) sau mỗi N khung hình. Mặc định là `3` (rất mượt). Nếu để `1`, AI sẽ quét liên tục gây nặng CPU.
+- `params.track_timeout` (Tùy chọn): Số giây (thời gian) cho phép mất dấu vật thể trước khi AI quyết định khai tử và bắn sự kiện `end`. Mặc định `2.0`. Mở rộng thời gian này nếu vật thể hay bị khuất sau cây/vật cản.
 
 **`PATCH /streams/{stream_id}`** — cập nhật `params` của luồng đang chạy (không cần dừng/khởi động lại)
 
