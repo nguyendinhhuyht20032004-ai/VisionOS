@@ -50,6 +50,7 @@ class StreamWorker(threading.Thread):
         self.running = True
         self._reported_tracks = set()
         self._track_last_seen = {}  # dict to store last seen time of each track_id
+        self._prev_centers = {}    # track_id -> (cx, cy, timestamp) for velocity
 
         # env vars (đã định nghĩa trong AI_SERVICE_INTEGRATION.md)
         self.reconnect_interval = float(os.getenv("RTSP_RECONNECT_INTERVAL_SEC", "5"))
@@ -105,6 +106,10 @@ class StreamWorker(threading.Thread):
     def run(self):
         self._open_source()
         last_pub = 0.0
+        _yolo_samples = []
+        _tuned = False
+        _slow_cpu = False
+        _last_latency = 0.0
 
         while self.running:
             fps = self.params.publish_fps if self.params.publish_fps is not None else float(os.getenv("OVERLAY_PUBLISH_FPS", "12"))
@@ -122,15 +127,28 @@ class StreamWorker(threading.Thread):
                     self.fs = None
                     time.sleep(self.reconnect_interval)
                 else:
-                    time.sleep(0.1) # Wait for first frame
+                    time.sleep(0.1)
                 continue
-
-            loop_start = time.time()
 
             # ----- AI pipeline -----
             t_ai = time.time()
             out = self.counter.process(frame)
             ai_ms = (time.time() - t_ai) * 1000
+
+            # ----- Auto-tune detect_every from actual YOLO speed -----
+            cur_latency = self.counter._last_latency_ms
+            if not _tuned and cur_latency != _last_latency and cur_latency > 0:
+                _last_latency = cur_latency
+                _yolo_samples.append(cur_latency)
+                if len(_yolo_samples) >= 5:
+                    avg_ms = sum(_yolo_samples) / len(_yolo_samples)
+                    if avg_ms > 150:
+                        self.counter.detect_every = 1
+                        _slow_cpu = True
+                        print(f"[StreamWorker] {self.stream_id} YOLO avg={avg_ms:.0f}ms → detect_every=1 (CPU mode)", flush=True)
+                    else:
+                        print(f"[StreamWorker] {self.stream_id} YOLO avg={avg_ms:.0f}ms → keeping detect_every={self.counter.detect_every}", flush=True)
+                    _tuned = True
 
             # ----- Publish (giới hạn FPS) -----
             now = time.time()
@@ -151,11 +169,12 @@ class StreamWorker(threading.Thread):
                 real_fps = 1000.0 / max(total_ms, 1e-3)
                 print(f"[Benchmark] {self.stream_id} | AI: {ai_ms:.0f}ms | Pub: {pub_ms:.0f}ms | Total: {total_ms:.0f}ms ({real_fps:.1f} fps)", flush=True)
 
-            # Pace loop to target FPS — avoid burning CPU on frames we won't publish
-            elapsed = time.time() - loop_start
-            sleep_time = interval - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            # ----- Loop pacing -----
+            if not _slow_cpu:
+                elapsed = time.time() - now
+                sleep_time = interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
 
         # clean up when stopped
         if self.fs:
@@ -180,15 +199,29 @@ class StreamWorker(threading.Thread):
                 y2 = float(det.xyxy[i][3])
                 w = x2 - x1
                 h = y2 - y1
-                boxes.append({
+                box_info = {
                     "track_id": str(tid),
                     "class": str(det.data.get("class_name")[i]) if "class_name" in det.data and len(det.data["class_name"]) > i else "",
                     "confidence": float(det.confidence[i]) if hasattr(det, "confidence") and det.confidence is not None else 0.0,
                     "bbox": [x1, y1, w, h],
-                })
+                }
+                cx, cy = x1 + w / 2, y1 + h / 2
+                now_v = time.time()
+                prev = self._prev_centers.get(str(tid))
+                if prev is not None:
+                    dt = now_v - prev[2]
+                    if dt > 0.01:
+                        box_info["velocity"] = [round((cx - prev[0]) / dt, 1),
+                                                round((cy - prev[1]) / dt, 1)]
+                    else:
+                        box_info["velocity"] = [0.0, 0.0]
+                else:
+                    box_info["velocity"] = [0.0, 0.0]
+                self._prev_centers[str(tid)] = (cx, cy, now_v)
+                boxes.append(box_info)
                 current_tids.add(tid)
                 self._track_last_seen[tid] = time.time()
-                self._track_classes[tid] = boxes[-1]["class"]
+                self._track_classes[tid] = box_info["class"]
 
                 # Emit start event when a new track appears
                 if tid not in self._reported_tracks:
@@ -211,7 +244,8 @@ class StreamWorker(threading.Thread):
                 del self._track_classes[tid]
             if tid in self._reported_tracks:
                 self._reported_tracks.remove(tid)
-        
+            self._prev_centers.pop(str(tid), None)
+
         # Clear line crossing events — IN/OUT không nằm trong enum start|end của spec
         if det and hasattr(det, "cross_events"):
             det.cross_events = []
