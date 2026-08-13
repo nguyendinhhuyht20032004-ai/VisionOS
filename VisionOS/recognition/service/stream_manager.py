@@ -63,7 +63,7 @@ class StreamWorker(threading.Thread):
     def _build_counter(self):
         # Prompt = các class được join bằng ','
         prompt = ",".join(self.params.classes) if self.params.classes else "person"
-        conf = self.params.conf or 0.25
+        conf = self.params.conf or 0.35
 
         # Determine counting type from ROI
         counting_type = "fullscreen"
@@ -127,13 +127,28 @@ class StreamWorker(threading.Thread):
             loop_start = time.time()
 
             # ----- AI pipeline -----
+            t_ai = time.time()
             out = self.counter.process(frame)
+            ai_ms = (time.time() - t_ai) * 1000
 
             # ----- Publish (giới hạn FPS) -----
             now = time.time()
             if now - last_pub >= interval:
+                t_pub = time.time()
                 self._publish_result(out)
+                pub_ms = (time.time() - t_pub) * 1000
                 last_pub = now
+            else:
+                pub_ms = 0.0
+
+            # ----- Benchmark log (mỗi 30 frame) -----
+            total_ms = (time.time() - loop_start) * 1000
+            if not hasattr(self, '_bench_count'):
+                self._bench_count = 0
+            self._bench_count += 1
+            if self._bench_count % 30 == 0:
+                real_fps = 1000.0 / max(total_ms, 1e-3)
+                print(f"[Benchmark] {self.stream_id} | AI: {ai_ms:.0f}ms | Pub: {pub_ms:.0f}ms | Total: {total_ms:.0f}ms ({real_fps:.1f} fps)", flush=True)
 
             # Pace loop to target FPS — avoid burning CPU on frames we won't publish
             elapsed = time.time() - loop_start

@@ -55,11 +55,23 @@ try:
     import redis
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     redis_client = redis.from_url(redis_url, decode_responses=True)
+    redis_client.ping()  # kiểm tra kết nối thực sự
+    stream_key = os.getenv("REDIS_STREAM_KEY", "VISIONOS_RESULTS")
     from recognition.service.stream_manager import StreamManager
     stream_manager = StreamManager(redis_cli=redis_client)
-    print(f"✅ Bật Stream Control API (Redis={redis_url})")
+    print(f"{'='*60}")
+    print(f"✅ AI Service khởi động thành công!")
+    print(f"   Redis:        {redis_url} (PING OK)")
+    print(f"   Stream Key:   {stream_key}")
+    print(f"   YOLO Weights: {os.getenv('YOLO_WEIGHTS', 'yolov8s.pt')}")
+    print(f"   YOLO ImgSz:   {os.getenv('YOLO_IMGSZ', '640')}")
+    print(f"   YOLO Conf:    {os.getenv('YOLO_CONF', '0.3')}")
+    print(f"   Publish FPS:  {os.getenv('OVERLAY_PUBLISH_FPS', '12')}")
+    print(f"   ReID Stitch:  {os.getenv('REID_STITCH', '1')}")
+    print(f"   Smoother Len: {os.getenv('SMOOTHER_LEN', '2')}")
+    print(f"{'='*60}")
 except Exception as e:
-    print(f"Warning: Failed to init Redis. Error: {e}")
+    print(f"❌ Warning: Failed to init Redis. Error: {e}")
     redis_client = None
     stream_manager = None
 

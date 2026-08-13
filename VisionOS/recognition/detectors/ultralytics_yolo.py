@@ -24,13 +24,13 @@ __all__ = ["UltralyticsYoloDetector"]
 class UltralyticsYoloDetector:
     """Detector YOLOv8 (ultralytics) cho đối tượng COCO: người, xe…
 
-    ĐỂ ĐẾM ÍT BỎ SÓT NGƯỜI/XE (recall cao), mặc định mạnh tay:
-      * **yolov8x** — bản LỚN NHẤT họ YOLOv8 (recall cao nhất; nano/m hay bỏ sót
-        người xa/nhỏ, xe khuất). Env ``YOLO_WEIGHTS`` đổi (yolov8m.pt cho nhanh,
-        hoặc yolo11x.pt/yolov9e.pt nếu muốn mới hơn).
-      * **conf=0.15** — ngưỡng THẤP để bắt cả vật mờ/khuất (bỏ sót giảm; nhiễu thừa
-        do tracker + min-track lọc bớt). Env ``YOLO_CONF``.
-      * **imgsz=1280** — ảnh lớn → vật NHỎ/ở xa rõ hơn → bắt được. Env ``YOLO_IMGSZ``.
+    Cân bằng TỐC ĐỘ + ĐỘ CHÍNH XÁC để chạy realtime trên CPU:
+      * **yolov8s** — bản SMALL (44.9% mAP, 11.2M params): bắt tốt xe/người ở
+        khoảng cách trung bình, vẫn chạy 15-20 FPS trên CPU. Env ``YOLO_WEIGHTS``
+        đổi (yolov8m.pt cho chính xác hơn, yolov8n.pt cho siêu nhẹ).
+      * **conf=0.3** — ngưỡng vừa phải, giảm false positive (bóng xe, biển quảng cáo)
+        nhưng vẫn bắt được vật rõ ràng. Env ``YOLO_CONF``.
+      * **imgsz=640** — ảnh vừa → nhanh trên CPU. GPU nên dùng 1280. Env ``YOLO_IMGSZ``.
       * **max_det=1000** — cảnh ĐÔNG (đám đông, kẹt xe) không bị cắt ở 300. Env ``YOLO_MAX_DET``.
       * **augment (TTA)** — bật ``YOLO_AUGMENT=1`` để tăng recall thêm (chậm hơn ~2-3×).
     """
@@ -44,12 +44,12 @@ class UltralyticsYoloDetector:
         device: Optional[str] = None,
         imgsz: Optional[int] = None,
     ):
-        # yolov8x (lớn nhất) — RECALL cao nhất, giảm BỎ SÓT người/xe. Đổi bằng YOLO_WEIGHTS.
-        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8x.pt")
+        # yolov8s (small) — cân bằng tốc độ + chính xác trên CPU. Đổi bằng YOLO_WEIGHTS.
+        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8s.pt")
         self.confidence = (confidence if confidence is not None
-                           else float(os.environ.get("YOLO_CONF", "0.15")))
+                           else float(os.environ.get("YOLO_CONF", "0.3")))
         self.iou = iou
-        self.imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "1280"))
+        self.imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "640"))
         # max_det: cảnh đông không bị chặn ở 300 (mặc định ultralytics). augment=TTA.
         self.max_det = int(os.environ.get("YOLO_MAX_DET", "1000"))
         self.augment = os.environ.get("YOLO_AUGMENT", "0") == "1"

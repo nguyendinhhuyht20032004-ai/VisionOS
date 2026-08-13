@@ -25,7 +25,7 @@
 ## 2️⃣ Response schema (real‑time job status – **/api/jobs/{id}**)
 ```json
 {
-  "id": "string",
+  "id": "string----------------------",
   "running": true|false,
   "status": "string",                 // e.g. "đang chạy", "đã dừng", "lỗi"
   "error": "string?",

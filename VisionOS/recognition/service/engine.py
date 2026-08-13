@@ -21,7 +21,7 @@ class StreamingCounter:
     """Đếm theo luồng cho MỘT scenario + MỘT detector. Gọi :meth:`process` mỗi frame."""
 
     def __init__(self, scenario, detector, resolution: Optional[Tuple[int, int]] = None,
-                 track_thresh: float = 0.25, smoother_len: int = 8, detect_every: int = 1,
+                 track_thresh: float = 0.25, smoother_len: int = 2, detect_every: int = 1,
                  merge_label: Optional[str] = None):
         import warnings
 
@@ -38,8 +38,8 @@ class StreamingCounter:
 
         # ByteTrack (fallback theo phiên bản) — bám dai để đỡ đứt track = đỡ bỏ sót.
         self.tracker = None
-        for kw in (dict(track_activation_threshold=track_thresh, minimum_consecutive_frames=1,
-                        lost_track_buffer=120),
+        for kw in (dict(track_activation_threshold=track_thresh, minimum_consecutive_frames=3,
+                        lost_track_buffer=30),
                    dict(track_thresh=track_thresh), {}):
             try:
                 self.tracker = sv.ByteTrack(**kw)
