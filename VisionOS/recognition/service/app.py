@@ -86,8 +86,9 @@ def start_stream(stream_id: str, req: StreamControlRequest):
     if not stream_manager:
         raise HTTPException(status_code=500, detail="StreamManager/Redis not initialized")
     try:
-        stream_manager.start(stream_id, req)
-        return {"status": "success", "message": f"Stream {stream_id} started"}
+        result = stream_manager.start(stream_id, req)
+        action = result.get("status", "started") # 'started' or 'updated'
+        return {"status": "success", "message": f"Stream {stream_id} {action}"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
