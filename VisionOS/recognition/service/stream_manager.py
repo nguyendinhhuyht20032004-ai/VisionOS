@@ -322,8 +322,17 @@ class StreamManager:
     def start(self, stream_id: str, req: StreamControlRequest):
         with self.lock:
             if stream_id in self.workers:
-                print(f"[StreamManager] Stream {stream_id} already exists. Stopping old stream to restart...", flush=True)
-                self.workers[stream_id].stop()
+                worker = self.workers[stream_id]
+                # Nếu URL không đổi, cập nhật động thông số mà không cần khởi động lại
+                if worker.rtsp_url == req.rtsp_url:
+                    print(f"[StreamManager] Stream {stream_id} exists with same URL. Updating params dynamically...", flush=True)
+                    worker.update_params(req.params or StreamParams())
+                    return {"status": "updated", "stream_id": stream_id}
+                else:
+                    # Nếu URL thay đổi, bắt buộc phải tắt đi bật lại
+                    print(f"[StreamManager] Stream {stream_id} URL changed. Stopping old stream to restart...", flush=True)
+                    worker.stop()
+            
             worker = StreamWorker(stream_id, req, self.redis)
             self.workers[stream_id] = worker
             worker.start()
