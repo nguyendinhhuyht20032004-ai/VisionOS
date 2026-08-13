@@ -1,131 +1,143 @@
 import cv2
 import json
-import time
 import redis
+import time
+import threading
+import supervision as sv
+import numpy as np
 import requests
-import sys
 
-API_URL = "http://localhost:8000/streams/cam-test-redis"
-VIDEO_PATH = "data/people-walking.mp4"
+# 1. Bật AI theo tên stream
+import cv2
+import json
+import redis
+import time
+import threading
+import supervision as sv
+import numpy as np
+import os
 
-# 1. Gọi API bật AI
-payload = {
-  "camera_id": "cam-test-redis",
-  "rtsp_url": "/data/people-walking.mp4", # Path bên trong Docker Container
-  "params": {
-    "classes": ["person"],
-    "publish_fps": 30.0,   # Ép AI nhả toạ độ cực nhanh
-    "detect_every": 3
-  }
-}
-print("Bật AI Service...")
-requests.post(API_URL, json=payload)
+# Ép OpenCV dùng TCP thay vì UDP (vì Docker trên Mac hay lỗi drop gói tin UDP qua port mapping)
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+
+# 1. Mở luồng RTSP (video live đang phát qua MediaMTX)
+rtsp_url = "rtsp://127.0.0.1:8554/test-people"
+print(f"Đang kết nối luồng RTSP: {rtsp_url}")
+cap = cv2.VideoCapture(rtsp_url)
+
+if not cap.isOpened():
+    print(f"LỖI: Không thể mở luồng RTSP. Vui lòng chạy 'python3 test_people.py' trước!")
+    exit(1)
 
 # 2. Kết nối Redis
 print("Kết nối Redis...")
-try:
-    r_cli = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-    r_cli.ping()
-except Exception:
-    print("❌ Không kết nối được Redis ở localhost:6379. Nhớ bật Docker lên nhé!")
-    sys.exit(1)
+r_cli = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
-# 3. Đọc Video bằng OpenCV
-cap = cv2.VideoCapture(VIDEO_PATH)
-if not cap.isOpened():
-    print(f"❌ Không mở được video {VIDEO_PATH}")
-    sys.exit(1)
+# 3. Thread nhận dữ liệu từ Redis (không làm lag video)
+latest_boxes = []
+last_redis_time = time.time()
+running = True
 
-last_id = '$'
-import supervision as sv
-import numpy as np
+def redis_listener():
+    global latest_boxes, last_redis_time
+    last_id = '$'
+    while running:
+        messages = r_cli.xread({'VISIONOS_RESULTS': last_id}, count=10, block=100)
+        if not messages:
+            continue
+        for stream_name, msgs in messages:
+            for msg_id, msg_data in msgs:
+                last_id = msg_id
+                data = json.loads(msg_data['data'])
+                # Lắng nghe stream-people từ test_people.py
+                if data['type'] == 'frame' and data['stream_id'] == 'stream-people':
+                    latest_boxes = data['boxes']
+                    last_redis_time = time.time() # Cập nhật thời điểm nhận gói tin
 
+threading.Thread(target=redis_listener, daemon=True).start()
+
+# 4. Khởi tạo Supervision
 box_annotator = sv.BoxAnnotator(color_lookup=sv.ColorLookup.TRACK)
 label_annotator = sv.LabelAnnotator(color_lookup=sv.ColorLookup.TRACK)
 trace_annotator = sv.TraceAnnotator(color_lookup=sv.ColorLookup.TRACK, trace_length=20)
 
-print("Đang phát Video (đồng bộ với API) và bọc Toạ độ từ Redis... (Bấm 'q' để thoát)")
+print("Đang phát Video RTSP Live và Nội suy Toạ độ từ Redis... (Bấm 'q' để thoát)")
 
 last_time = time.time()
 frame_count = 0
-fps = 0
+fps_display = 0
 
 while True:
-    # --- CHỜ TOẠ ĐỘ TỪ REDIS ĐỂ ĐỒNG BỘ HOÀN HẢO ---
-    # Block vô hạn cho đến khi API nhả frame mới
-    messages = r_cli.xread({'VISIONOS_RESULTS': last_id}, count=100, block=5000)
-    if not messages:
-        continue # Chờ tiếp
-        
-    for stream_name, msgs in messages:
-        for msg_id, msg_data in msgs:
-            last_id = msg_id
-            data = json.loads(msg_data['data'])
-            
-            if data['type'] == 'frame' and data['stream_id'] == 'cam-test-redis':
-                latest_boxes = data['boxes']
-                
-                # CHỈ ĐỌC 1 FRAME VIDEO KHI CÓ 1 FRAME TỪ REDIS (Giúp xoá bỏ độ trễ)
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                # --- TÍNH FPS ---
-                frame_count += 1
-                if time.time() - last_time >= 1.0:
-                    fps = frame_count / (time.time() - last_time)
-                    frame_count = 0
-                    last_time = time.time()
-                
-                # --- CHUYỂN ĐỔI SANG SUPERVISION (Đẹp & Mượt) ---
-                frame_h, frame_w = frame.shape[:2]
-                scale_x = frame_w / 960.0
-                scale_y = frame_h / 540.0
-                
-                xyxy = []
-                confidence = []
-                tracker_id = []
-                
-                for box in latest_boxes:
-                    x, y, w, h = box['bbox']
-                    x1, y1, x2, y2 = x*scale_x, y*scale_y, (x+w)*scale_x, (y+h)*scale_y
-                    xyxy.append([x1, y1, x2, y2])
-                    confidence.append(box['confidence'])
-                    tracker_id.append(int(box['track_id']))
-                
-                if len(xyxy) > 0:
-                    detections = sv.Detections(
-                        xyxy=np.array(xyxy),
-                        confidence=np.array(confidence),
-                        class_id=np.zeros(len(xyxy), dtype=int),
-                        tracker_id=np.array(tracker_id)
-                    )
-                    
-                    labels = [f"#{t_id} person {conf:.2f}" for t_id, conf in zip(detections.tracker_id, detections.confidence)]
-                    
-                    frame = box_annotator.annotate(scene=frame, detections=detections)
-                    frame = label_annotator.annotate(scene=frame, detections=detections, labels=labels)
-                    frame = trace_annotator.annotate(scene=frame, detections=detections)
-                
-                # Hiển thị FPS
-                cv2.putText(frame, f"API Processing: {fps:.1f} FPS", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                
-                # Hiển thị
-                frame_resized = cv2.resize(frame, (960, 540))
-                cv2.imshow("Supervision Redis Visualizer", frame_resized)
-
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-        else:
-            continue
-        break
-    else:
+    ret, frame = cap.read()
+    if not ret:
+        print("Mất kết nối RTSP, đang thử kết nối lại...")
+        time.sleep(1)
+        cap.release()
+        cap = cv2.VideoCapture(rtsp_url)
         continue
-    break
 
+    # --- TÍNH FPS ---
+    frame_count += 1
+    if time.time() - last_time >= 1.0:
+        fps_display = frame_count / (time.time() - last_time)
+        frame_count = 0
+        last_time = time.time()
+
+    # --- NỘI SUY TOẠ ĐỘ (INTERPOLATION) ---
+    delta_time = time.time() - last_redis_time
+    # Không nội suy nếu gói tin quá cũ (> 0.5s)
+    if delta_time > 0.5:
+        delta_time = 0.0
+
+    frame_h, frame_w = frame.shape[:2]
+    scale_x = frame_w / 960.0
+    scale_y = frame_h / 540.0
+
+    xyxy = []
+    confidence = []
+    tracker_id = []
+
+    for box in latest_boxes:
+        x, y, w, h = box['bbox']
+        vx, vy = box.get('velocity', [0.0, 0.0])
+        
+        # NỘI SUY: Vị trí mới = Vị trí cũ + Vận tốc * Thời gian trôi qua
+        pred_x = x + (vx * delta_time)
+        pred_y = y + (vy * delta_time)
+
+        x1 = pred_x * scale_x
+        y1 = pred_y * scale_y
+        x2 = (pred_x + w) * scale_x
+        y2 = (pred_y + h) * scale_y
+        
+        xyxy.append([x1, y1, x2, y2])
+        confidence.append(box['confidence'])
+        tracker_id.append(int(box['track_id']))
+
+    if len(xyxy) > 0:
+        detections = sv.Detections(
+            xyxy=np.array(xyxy),
+            confidence=np.array(confidence),
+            class_id=np.zeros(len(xyxy), dtype=int),
+            tracker_id=np.array(tracker_id)
+        )
+        labels = [f"#{t_id} {conf:.2f}" for t_id, conf in zip(detections.tracker_id, detections.confidence)]
+        frame = box_annotator.annotate(scene=frame, detections=detections)
+        frame = label_annotator.annotate(scene=frame, detections=detections, labels=labels)
+        frame = trace_annotator.annotate(scene=frame, detections=detections)
+
+    # Hiển thị FPS
+    cv2.putText(frame, f"Frontend Render: {fps_display:.1f} FPS", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+    if delta_time > 0:
+        cv2.putText(frame, f"Interpolation: +{delta_time*1000:.0f}ms", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 165, 0), 2)
+
+    frame_resized = cv2.resize(frame, (960, 540))
+    cv2.imshow("Supervision + Velocity Interpolation", frame_resized)
+
+    # RTSP stream tự pacing nên chỉ cần waitKey(1)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+running = False
 cap.release()
 cv2.destroyAllWindows()
-
-# 4. Tắt AI
-print("Tắt AI Service...")
-requests.delete(API_URL)

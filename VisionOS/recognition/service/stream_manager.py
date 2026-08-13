@@ -9,6 +9,11 @@ Mỗi stream được đại diện bởi một Thread (StreamWorker) thực hi�
 
 import os, json, time, datetime, threading, base64
 from typing import Dict, Optional
+import warnings
+
+# Tắt các cảnh báo spam từ YOLO / PyTorch như "half is deprecated"
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 import cv2
 import redis
@@ -130,6 +135,7 @@ class StreamWorker(threading.Thread):
                     time.sleep(0.1)
                 continue
 
+            loop_start = time.time()
             # ----- AI pipeline -----
             t_ai = time.time()
             out = self.counter.process(frame)
@@ -266,7 +272,12 @@ class StreamWorker(threading.Thread):
                 maxlen=self.maxlen,
                 approximate=True,
             )
-            print(f"[StreamWorker] {self.stream_id} published frame with {len(boxes)} boxes", flush=True)
+            if len(boxes) > 0:
+                sample = boxes[0]
+                bbox = sample['bbox']
+                print(f"[StreamWorker] {self.stream_id} published {len(boxes)} boxes. Sample Box ID {sample['track_id']}: x={bbox[0]:.1f}, y={bbox[1]:.1f}, v={sample['velocity']}", flush=True)
+            else:
+                print(f"[StreamWorker] {self.stream_id} published frame with 0 boxes", flush=True)
         except Exception as e:
             print(f"[StreamWorker] {self.stream_id} failed to publish to Redis: {e}", flush=True)
 

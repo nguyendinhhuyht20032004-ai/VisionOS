@@ -51,7 +51,8 @@ try:
     found_frame = False
     found_track = False
 
-    while time.time() - start_time < 20:
+    print("\nReading from Redis Stream (VISIONOS_RESULTS)... (Giữ Terminal này mở để duy trì RTSP, nhấn Ctrl+C để thoát)")
+    while time.time() - start_time < 600:
         streams = r.xread({'VISIONOS_RESULTS': last_id}, count=100, block=2000)
         if streams:
             for stream_name, messages in streams:
@@ -76,11 +77,6 @@ try:
                                 print(f"\n--- [TRACK EVENT] Redis Message {msg_id} ---")
                                 print(json.dumps(data, indent=2))
                                 found_track = True
-
-                if found_frame and found_track:
-                    break
-        if found_frame and found_track:
-            break
 
     if not found_frame:
         print("No 'frame' messages with detections found in Redis stream.")
