@@ -64,6 +64,17 @@ class StreamWorker(threading.Thread):
 
         self._build_counter()
         self.fs: Optional[FrameSource] = None
+        self.current_fps = 0.0
+
+    # -------------------------------------------------------------------
+    def get_status(self) -> dict:
+        return {
+            "stream_id": self.stream_id,
+            "camera_id": self.camera_id,
+            "rtsp_url": self.rtsp_url,
+            "fps": round(self.current_fps, 1),
+            "params": self.params.model_dump()
+        }
 
     # -------------------------------------------------------------------
     def _build_counter(self):
@@ -172,8 +183,8 @@ class StreamWorker(threading.Thread):
                 self._bench_count = 0
             self._bench_count += 1
             if self._bench_count % 30 == 0:
-                real_fps = 1000.0 / max(total_ms, 1e-3)
-                print(f"[Benchmark] {self.stream_id} | AI: {ai_ms:.0f}ms | Pub: {pub_ms:.0f}ms | Total: {total_ms:.0f}ms ({real_fps:.1f} fps)", flush=True)
+                self.current_fps = 1000.0 / max(total_ms, 1e-3)
+                print(f"[Benchmark] {self.stream_id} | AI: {ai_ms:.0f}ms | Pub: {pub_ms:.0f}ms | Total: {total_ms:.0f}ms ({self.current_fps:.1f} fps)", flush=True)
 
             # ----- Loop pacing -----
             if not _slow_cpu:
@@ -345,6 +356,10 @@ class StreamManager:
                 raise KeyError(f"Stream {stream_id} not found")
             worker.update_params(params)
             return {"status": "updated", "stream_id": stream_id}
+
+    def get_active_streams(self):
+        with self.lock:
+            return [worker.get_status() for worker in self.workers.values()]
 
     def stop(self, stream_id: str):
         with self.lock:

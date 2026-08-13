@@ -104,6 +104,16 @@ def update_stream(stream_id: str, params: StreamParams):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/streams")
+def get_streams():
+    if not stream_manager:
+        raise HTTPException(status_code=500, detail="StreamManager/Redis not initialized")
+    try:
+        active_streams = stream_manager.get_active_streams()
+        return {"status": "success", "count": len(active_streams), "streams": active_streams}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.delete("/streams/{stream_id}")
 def stop_stream(stream_id: str):
     if not stream_manager:
