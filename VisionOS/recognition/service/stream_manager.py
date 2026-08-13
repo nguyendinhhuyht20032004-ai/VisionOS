@@ -89,7 +89,8 @@ class StreamWorker(threading.Thread):
             scenario,
             detector,
             resolution=scenario.resolution,
-            detect_every=self.params.detect_every if self.params.detect_every is not None else 3,
+            detect_every=int(os.getenv("DETECT_EVERY",
+                                       str(self.params.detect_every if self.params.detect_every is not None else 3))),
             smoother_len=int(os.getenv("SMOOTHER_LEN", "2")),
         )
 

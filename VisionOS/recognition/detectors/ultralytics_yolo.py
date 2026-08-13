@@ -44,15 +44,16 @@ class UltralyticsYoloDetector:
         device: Optional[str] = None,
         imgsz: Optional[int] = None,
     ):
-        # yolov8s (small) — cân bằng tốc độ + chính xác trên CPU. Đổi bằng YOLO_WEIGHTS.
-        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8s.pt")
+        # Mặc định đổi sang yolov8m.pt (medium) cho độ chính xác cao hơn
+        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8m.pt")
         self.confidence = (confidence if confidence is not None
-                           else float(os.environ.get("YOLO_CONF", "0.3")))
+                           else float(os.environ.get("YOLO_CONF", "0.2")))
         self.iou = iou
         self.imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "640"))
         # max_det: cảnh đông không bị chặn ở 300 (mặc định ultralytics). augment=TTA.
         self.max_det = int(os.environ.get("YOLO_MAX_DET", "1000"))
         self.augment = os.environ.get("YOLO_AUGMENT", "0") == "1"
+        self.half = os.environ.get("YOLO_HALF", "0") == "1"
         # Lớp cần giữ: ưu tiên tham số, rồi env YOLO_CLASSES (cho model tuỳ biến như
         # VisDrone có tên lớp khác COCO), None = suy ra từ prompt.
         if want:
@@ -103,7 +104,7 @@ class UltralyticsYoloDetector:
             self._model.to(self.device)
         self._names = self._model.names       # dict {id: 'person', ...}
         print(f"✅ YOLOv8 ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}, "
-              f"max_det={self.max_det}, TTA={self.augment}) loaded in {time.time() - t0:.1f}s")
+              f"max_det={self.max_det}, TTA={self.augment}, half={self.half}) loaded in {time.time() - t0:.1f}s")
         return self
 
     @staticmethod
@@ -192,7 +193,7 @@ class UltralyticsYoloDetector:
         else:
             result = self._model(frame, conf=self.confidence, iou=self.iou,
                                  imgsz=self.imgsz, max_det=self.max_det,
-                                 augment=self.augment, verbose=False)[0]
+                                 augment=self.augment, half=self.half, verbose=False)[0]
             dets = self._boxes_to_detections(result.boxes, self._names, want)
             mode = "full"
         # Gộp box trùng khác lớp (cùng 1 xe 'truck'+'bus') → mỗi vật 1 nhãn.
