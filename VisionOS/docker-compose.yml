@@ -24,7 +24,7 @@ services:
       - REDIS_STREAM_MAXLEN=1000
       - SMOOTHER_LEN=2
       - REID_STITCH=0              # tắt ReID khi chạy CPU (tiết kiệm 15-20% CPU)
-      - YOLO_WEIGHTS=yolov8m.pt    # medium: chính xác hơn nhiều nhưng tốn CPU
+      - YOLO_WEIGHTS=yolov8s.pt    # small: nhanh hơn nhiều trên CPU, vẫn chính xác tốt
       - YOLO_IMGSZ=640             # 640 bắt tốt vật nhỏ/xa (480 nhanh nhưng bỏ sót)
       - YOLO_CONF=0.2              # hạ ngưỡng → bắt thêm nhiều đối tượng hơn
       - YOLO_HALF=1                # FP16: nhanh hơn ~20% trên Apple Silicon

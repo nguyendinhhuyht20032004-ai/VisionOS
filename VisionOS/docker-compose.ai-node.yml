@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  api:
+    image: huyhungds/visionos-api:latest
+    container_name: visionos-ai-worker
+    restart: always
+    network_mode: "host" # Chạy host network để đạt hiệu suất mạng tối đa, dễ dàng truy cập RTSP nội bộ
+    environment:
+      # TRỎ CÁC BIẾN NÀY VỀ IP CỦA MÁY CHỦ BACKEND (Nơi đang chạy Redis, MediaMTX, Qdrant)
+      - REDIS_URL=redis://192.168.1.100:6379 
+      - QDRANT_URL=http://192.168.1.100:6333
+      
+      # Các thông số tối ưu AI
+      - REDIS_STREAM_MAXLEN=1000
+      - RTSP_RECONNECT_INTERVAL_SEC=5
+      
+    volumes:
+      # Không cần mount code nữa vì code đã được đóng gói sẵn trong Image!
+      - ./data:/data  # Nếu muốn chia sẻ thư mục lưu video offline

@@ -44,8 +44,8 @@ class UltralyticsYoloDetector:
         device: Optional[str] = None,
         imgsz: Optional[int] = None,
     ):
-        # Mặc định đổi sang yolov8m.pt (medium) cho độ chính xác cao hơn
-        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8m.pt")
+        # Mặc định yolov8s.pt (small) — nhanh hơn nhiều trên CPU, vẫn chính xác tốt
+        self.weights = weights or os.environ.get("YOLO_WEIGHTS", "yolov8s.pt")
         self.confidence = (confidence if confidence is not None
                            else float(os.environ.get("YOLO_CONF", "0.2")))
         self.iou = iou
