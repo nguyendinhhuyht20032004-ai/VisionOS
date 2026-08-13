@@ -322,7 +322,8 @@ class StreamManager:
     def start(self, stream_id: str, req: StreamControlRequest):
         with self.lock:
             if stream_id in self.workers:
-                raise ValueError(f"Stream {stream_id} already exists")
+                print(f"[StreamManager] Stream {stream_id} already exists. Stopping old stream to restart...", flush=True)
+                self.workers[stream_id].stop()
             worker = StreamWorker(stream_id, req, self.redis)
             self.workers[stream_id] = worker
             worker.start()
