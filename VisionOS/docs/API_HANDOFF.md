@@ -1,144 +1,235 @@
-# Hướng dẫn Tích hợp AI Service (Dành cho Dev Frontend/Backend)
+# Huong dan Tich hop AI Service (Danh cho Dev Frontend/Backend)
 
-Tài liệu này mô tả chi tiết cách khởi chạy và giao tiếp với **VisionOS AI Service** (hệ thống đếm người/xe bằng camera sử dụng YOLO + Supervision + FastAPI + Qdrant).
+Tai lieu nay mo ta cach khoi chay va giao tiep voi **VisionOS AI Service**.
+Tich hop chinh qua **Control API** (`/streams/`) + **Redis Stream**.
 
 ---
 
-## 1. Khởi chạy Hệ thống
+## 1. Khoi chay He thong
 
-AI Service được đóng gói hoàn toàn bằng Docker. Bạn không cần cài đặt Python hay thư viện AI nào trên máy host.
-
-**Yêu cầu:** Máy tính cài sẵn Docker và Docker Compose.
-
-**Cách chạy:**
-Mở Terminal tại thư mục gốc của project (nơi chứa file `docker-compose.yml`) và chạy:
+### Docker (production)
 
 ```bash
 docker compose up --build
 ```
-*(Nếu muốn chạy ngầm, thêm cờ `-d`: `docker compose up -d --build`)*
 
-**Kết quả:**
-- **AI API Service** sẽ chạy tại: `http://localhost:8000`
-- **Qdrant (Vector DB)** dashboard sẽ chạy tại: `http://localhost:6333/dashboard`
+Ket qua:
+- **AI Service**: `http://localhost:8000`
+- **Redis**: `redis://localhost:6379`
+- **MediaMTX (RTSP relay)**: `rtsp://localhost:8554`
+
+### Native macOS (Apple Silicon)
+
+Yeu cau: Redis chay local, model CoreML da export.
+
+```bash
+# Cai Redis
+brew install redis && brew services start redis
+
+# Export model CoreML (chi can 1 lan)
+python export_coreml.py --weights yolov8m.pt --half
+
+# Chay service
+./run_native.sh
+```
 
 ---
 
-## 2. Các Nguồn Camera (Input Source) Hỗ trợ
+## 2. API Endpoints
 
-Khi gọi API, tham số `source` chấp nhận các định dạng sau:
-- **Luồng RTSP:** `rtsp://admin:password@192.168.1.10:554/stream`
-- **Luồng HTTP/HTTPS (MJPEG):** `http://domain.com/video.mjpg`
-- **File video cục bộ:** Bằng cách mount volume vào Docker (ví dụ: tạo thư mục `videos` ngang hàng file docker-compose.yml, cấu hình volume mapping ` - ./videos:/app/videos` trong compose, rồi truyền source là `/app/videos/file.mp4`).
-- **Webcam USB:** `0` hoặc `1` (Cần cấu hình device mapping trong Docker).
+### 2.1 Health check
 
----
+```
+GET /healthz
+```
+```json
+{"status": "ok", "jobs": 0, "vectordb": "qdrant"}
+```
 
-## 3. Danh sách API Endpoints
+### 2.2 Bat dau xu ly camera (Control API)
 
-### 3.1. Kiểm tra trạng thái hệ thống
-- **Endpoint:** `GET /healthz`
-- **Mô tả:** Dùng để check xem service đã khởi động xong và sẵn sàng nhận request chưa (hữu ích cho k8s liveness probe hoặc load balancer).
-- **Response:**
-  ```json
-  {"status": "ok"}
-  ```
+```
+POST /streams/{stream_id}
+Content-Type: application/json
+```
 
-### 3.2. Lấy 1 Frame ảnh mẫu để người dùng vẽ (Snapshot)
-- **Endpoint:** `GET /api/snapshot`
-- **Mô tả:** Trả về một ảnh tĩnh (JPEG) trích xuất từ camera ngay tại thời điểm gọi. Dùng để làm ảnh nền trên frontend cho user vẽ các điểm toạ độ (vạch/vùng đếm).
-- **Query Params:**
-  - `source` (string, bắt buộc): Đường dẫn camera (VD: `?source=rtsp://...`)
-- **Response:** Binary image (Content-Type: `image/jpeg`).
-
-### 3.3. Tạo Job đếm mới
-- **Endpoint:** `POST /api/jobs`
-- **Mô tả:** Khởi tạo một tiến trình đếm chạy ngầm.
-- **Request Body (JSON):**
-  ```json
-  {
-    "source": "rtsp://192.168.1.10:554/stream",
-    "prompt": "person",  // "person", "car", "truck", "motorcycle", "bus"
-    "counting_type": "line", // "line" (cắt vạch) hoặc "zone" (trong vùng)
-    "line": [10, 50, 90, 50], // [x1, y1, x2, y2] tính theo % chiều rộng/cao của ảnh. VD: 50 = giữa ảnh.
-    "zone": null, // Nếu counting_type="zone", truyền mảng toạ độ đa giác: [[x1,y1], [x2,y2], [x3,y3], ...] (%)
-    "model": "yolo", 
-    "max_fps": 10.0, // Giới hạn số frame xử lý mỗi giây để tiết kiệm CPU/GPU
-    "in_label": "Vào", // (Tuỳ chọn) Text hiển thị chiều IN
-    "out_label": "Ra" // (Tuỳ chọn) Text hiển thị chiều OUT
+```json
+{
+  "camera_id": "cam-01",
+  "rtsp_url": "rtsp://admin:pass@192.168.1.10:554/stream",
+  "params": {
+    "classes": ["person"],
+    "conf": 0.3,
+    "detect_every": 3,
+    "track_timeout": 2.0,
+    "publish_fps": 12.0,
+    "roi": null
   }
-  ```
-- **Response (200 OK):**
-  ```json
-  {
-    "id": "e2d847fa", // Lưu ID này lại để query kết quả hoặc xem stream
-    "status": "running"
-  }
-  ```
+}
+```
 
-### 3.4. Lấy kết quả đếm (Polling)
-- **Endpoint:** `GET /api/jobs/{id}`
-- **Mô tả:** Frontend gọi liên tục (VD: mỗi 1 giây) để lấy số liệu đếm mới nhất.
-- **Response (200 OK):**
-  ```json
-  {
-    "id": "e2d847fa",
-    "status": "running",
-    "source": "rtsp://...",
-    "counting_type": "line",
-    "in": 12,        // Số lượng đi vào
-    "out": 8,        // Số lượng đi ra
-    "total": 20,     // Tổng số lượng cắt vạch
-    "tracks": 15,    // Số lượng object unique đã bắt được
-    "zone_current": 0, // Số object HIỆN ĐANG CÓ trong vùng (nếu counting_type="zone")
-    "zone_peak": 0,    // Kỷ lục số object nhiều nhất từng có trong vùng
-    "det_per_frame": 3.5, 
-    "fps": 10.2,     // FPS thực tế hệ thống đang xử lý
-    "frames": 450,
-    "elapsed_s": 44.1
-  }
-  ```
-  *(Nếu ID không tồn tại, trả về `404 Not Found`)*
+Response:
+```json
+{"status": "success", "message": "Stream entrance started"}
+```
 
-### 3.5. Xem luồng video trực tiếp (Livestream Annotated)
-- **Endpoint:** `GET /api/jobs/{id}/mjpeg`
-- **Mô tả:** Luồng video đã được AI vẽ đè bounding box, vạch đếm, id... Dùng thẻ `<img>` của HTML để hiển thị trực tiếp.
-- **Cách dùng (Frontend):**
-  ```html
-  <img src="http://localhost:8000/api/jobs/e2d847fa/mjpeg" width="100%" />
-  ```
+**`stream_id`**: chuoi bat ky do backend tu dat (VD: `"entrance"`, `"cam-01"`).
 
-### 3.6. Dừng một Job
-- **Endpoint:** `POST /api/jobs/{id}/stop`
-- **Mô tả:** Huỷ bỏ luồng xử lý AI. Giải phóng tài nguyên.
-- **Response (200 OK):**
-  ```json
-  {"stopped": true}
-  ```
+**`params.roi`**: 
+- `null` hoac bo qua → fullscreen (dem tat ca trong khung)
+- `[[x1,y1], [x2,y2]]` (2 diem) → line counting (dem qua vach)
+- `[[x1,y1], [x2,y2], [x3,y3], ...]` (>2 diem) → zone counting (dem trong vung)
 
-### 3.7. Truy xuất Sự kiện (Lịch sử đếm)
-- **Endpoint:** `GET /api/events`
-- **Mô tả:** Lấy danh sách các đối tượng đã đi qua camera gần đây nhất (dữ liệu móc từ Qdrant Vector DB).
-- **Query Params:**
-  - `limit` (integer, tuỳ chọn): Số lượng sự kiện trả về. Mặc định: 10.
-- **Response:**
-  ```json
-  [
+**`params.classes`**: danh sach lop can detect. VD: `["person"]`, `["car","truck","bus"]`, `["person","car"]`.
+
+### 2.3 Cap nhat tham so (khong can dung camera)
+
+```
+PATCH /streams/{stream_id}
+Content-Type: application/json
+```
+
+```json
+{
+  "conf": 0.25,
+  "detect_every": 5,
+  "publish_fps": 8.0
+}
+```
+
+### 2.4 Xem danh sach stream dang chay
+
+```
+GET /streams
+```
+
+```json
+{
+  "status": "success",
+  "count": 2,
+  "streams": [
     {
-      "time": "2026-08-05T15:00:00Z",
-      "class_name": "person",
-      "track_id": 42,
-      "score": 0.95,
-      "crop_image_url": "..." 
-    },
-    ...
+      "stream_id": "entrance",
+      "camera_id": "cam-01",
+      "rtsp_url": "rtsp://...",
+      "fps": 11.5,
+      "params": {"classes": ["person"], "conf": 0.3, "detect_every": 3, "track_timeout": 2.0, "publish_fps": 12.0, "roi": null}
+    }
   ]
-  ```
+}
+```
+
+### 2.5 Dung camera
+
+```
+DELETE /streams/{stream_id}
+```
+
+```json
+{"status": "success", "message": "Stream entrance stopped"}
+```
 
 ---
 
-## 4. Ghi chú Quan trọng cho Dev
+## 3. Doc ket qua tu Redis Stream
 
-1. **Toạ độ là % (Percentage):** Khi user vẽ trên Frontend, bạn phải quy đổi toạ độ pixel trên màn hình của user thành **Phần trăm (0 - 100)** so với chiều rộng/cao của ảnh mẫu. Điều này giúp hệ thống hoạt động đúng bất kể độ phân giải của luồng camera thực tế là bao nhiêu (HD, Full HD, 4K).
-2. **Quản lý Job ID:** Vì mỗi job ăn khá nhiều tài nguyên (CPU/GPU), Frontend cần đảm bảo gọi API `POST /api/jobs/{id}/stop` khi người dùng tắt camera hoặc chuyển trang, tránh việc server quá tải do chạy ngầm các camera không còn ai xem.
-3. **Cấu hình Model:** Trong `docker-compose.yml`, mặc định đang dùng `yolov8m.pt` (Medium) và ảnh `960px`. Nếu deploy trên server không có GPU rời, hãy đổi thành `yolov8n.pt` (Nano) và `640px` để đảm bảo hệ thống không bị nghẽn (Xem chi tiết file docker-compose.yml).
+Ket qua AI duoc day len Redis Stream `VISIONOS_RESULTS` (cau hinh qua env `REDIS_STREAM_KEY`).
+
+### Doc bang XREAD (blocking)
+
+```python
+import redis, json
+
+r = redis.from_url("redis://localhost:6379", decode_responses=True)
+last_id = "0-0"
+
+while True:
+    result = r.xread({stream_key: last_id}, block=5000, count=10)
+    if not result:
+        continue
+    for stream_name, messages in result:
+        for msg_id, fields in messages:
+            last_id = msg_id
+            data = json.loads(fields["data"])
+
+            if data["type"] == "frame":
+                boxes = data["boxes"]
+                print(f"Camera {data['camera_id']}: {len(boxes)} objects")
+
+            elif data["type"] == "track_event":
+                print(f"Event: track {data['track_id']} {data['event']}")
+```
+
+### Cau truc message `type: "frame"`
+
+```json
+{
+  "type": "frame",
+  "camera_id": "cam-01",
+  "stream_id": "entrance",
+  "frame_timestamp": "2026-08-14T10:30:00.123Z",
+  "resolution": {"width": 960, "height": 540},
+  "boxes": [
+    {
+      "track_id": "5",
+      "class": "person",
+      "confidence": 0.87,
+      "bbox": [120.5, 80.3, 60.0, 140.0],
+      "velocity": [12.3, -5.1]
+    }
+  ]
+}
+```
+
+- `bbox`: `[x, y, width, height]` (pixel, goc tren-trai)
+- `velocity`: `[vx, vy]` (pixel/giay)
+
+### Cau truc message `type: "track_event"`
+
+```json
+{
+  "type": "track_event",
+  "camera_id": "cam-01",
+  "stream_id": "entrance",
+  "track_id": "5",
+  "class": "person",
+  "event": "start",
+  "timestamp": "2026-08-14T10:30:00.123Z"
+}
+```
+
+Cac gia tri `event`:
+| Event | Y nghia |
+|---|---|
+| `start` | Vat the moi xuat hien (track moi) |
+| `end` | Mat dau qua `track_timeout` giay |
+| `IN` | Di vao qua vach hoac vao vung |
+| `OUT` | Di ra qua vach hoac ra khoi vung |
+
+---
+
+## 4. Legacy Jobs API (Web UI)
+
+He thong van giu cac endpoint `/api/jobs/*` phuc vu cho trang web UI tich hop san (truy cap `GET /`).
+Trang nay cho phep ve vach/vung tren canvas va xem MJPEG truc tiep.
+
+| Endpoint | Mo ta |
+|---|---|
+| `GET /api/snapshot?source=...` | Lay 1 frame JPEG de ve |
+| `POST /api/jobs` | Tao job dem (co MJPEG stream) |
+| `GET /api/jobs/{id}` | Ket qua dem |
+| `GET /api/jobs/{id}/mjpeg` | Luong video annotated |
+| `POST /api/jobs/{id}/stop` | Dung job |
+
+> **Luu y:** Doi voi tich hop backend, su dung Control API (`/streams/`) + Redis Stream thay vi Jobs API.
+> Jobs API khong day ket qua len Redis.
+
+---
+
+## 5. Ghi chu quan trong
+
+1. **Toa do ROI la pixel tuyet doi** (khong phai %). Lay frame tu camera de xac dinh toa do chinh xac.
+2. **stream_id la unique.** Goi POST voi cung stream_id se cap nhat params neu URL khong doi, hoac restart neu URL thay doi.
+3. **Redis Stream co gioi han.** Mac dinh `maxlen=1000` (env `REDIS_STREAM_MAXLEN`). Du lieu cu tu dong bi xoa.
+4. **Backend can goi DELETE** khi nguoi dung tat camera de giai phong tai nguyen.
+5. **Nhieu camera dong thoi:** Moi stream la 1 thread. Server 4 core xu ly duoc 4-8 camera (tuy model YOLO).
