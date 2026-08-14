@@ -10,6 +10,8 @@ data/vecteezy_traffic.mov
 
 # YOLO model weights (quá nặng, không nên lưu trong Git)
 *.pt
+*.mlpackage/
+*.mlmodel
 
 # Event video clips sinh ra khi AI chạy
 data/videos/

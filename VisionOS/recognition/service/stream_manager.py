@@ -56,6 +56,7 @@ class StreamWorker(threading.Thread):
         self._reported_tracks = set()
         self._track_last_seen = {}  # dict to store last seen time of each track_id
         self._prev_centers = {}    # track_id -> (cx, cy, timestamp) for velocity
+        self._pending_cross_events = []
 
         # env vars (đã định nghĩa trong AI_SERVICE_INTEGRATION.md)
         self.reconnect_interval = float(os.getenv("RTSP_RECONNECT_INTERVAL_SEC", "5"))
@@ -80,7 +81,7 @@ class StreamWorker(threading.Thread):
     def _build_counter(self):
         # Prompt = các class được join bằng ','
         prompt = ",".join(self.params.classes) if self.params.classes else "person"
-        conf = self.params.conf or 0.35
+        conf = self.params.conf or 0.3
 
         # Determine counting type from ROI
         counting_type = "fullscreen"
@@ -151,6 +152,12 @@ class StreamWorker(threading.Thread):
             t_ai = time.time()
             out = self.counter.process(frame)
             ai_ms = (time.time() - t_ai) * 1000
+
+            # Collect cross events (IN/OUT) before next detection overwrites them
+            det_ev = self.counter.last_det
+            if det_ev and hasattr(det_ev, "cross_events") and det_ev.cross_events:
+                self._pending_cross_events.extend(det_ev.cross_events)
+                det_ev.cross_events = []
 
             # ----- Auto-tune detect_every from actual YOLO speed -----
             cur_latency = self.counter._last_latency_ms
@@ -263,9 +270,12 @@ class StreamWorker(threading.Thread):
                 self._reported_tracks.remove(tid)
             self._prev_centers.pop(str(tid), None)
 
-        # Clear line crossing events — IN/OUT không nằm trong enum start|end của spec
-        if det and hasattr(det, "cross_events"):
-            det.cross_events = []
+        # Publish IN/OUT crossing events to Redis
+        if self._pending_cross_events:
+            for tid, direction in self._pending_cross_events:
+                cls_name = self._track_classes.get(tid, "unknown") if hasattr(self, '_track_classes') else "unknown"
+                self._publish_track_event(str(tid), cls_name, direction)
+            self._pending_cross_events = []
 
         frame_msg = {
             "type": "frame",

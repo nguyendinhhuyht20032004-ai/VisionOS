@@ -105,6 +105,7 @@ class StreamingCounter:
         self.result = CountResult(scenario_key=scenario.key, counting_type=scenario.counting_type,
                                   in_label=scenario.in_label, out_label=scenario.out_label)
         self._seen: set = set()
+        self._prev_in_zone: set = set()
         self._t0 = time.time()
         self._last_latency_ms = 0.0
         # Frame + detections của lần process GẦN NHẤT (cho service crop vật đã đếm → vector DB).
@@ -173,6 +174,23 @@ class StreamingCounter:
                 cur = int(inside.sum())
                 self.result.zone_current = cur
                 self.result.zone_peak = max(self.result.zone_peak, cur)
+                if not hasattr(det, "cross_events"):
+                    det.cross_events = []
+                current_in_zone = set()
+                current_tracked = set()
+                if det.tracker_id is not None:
+                    for i in range(len(det)):
+                        tid = det.tracker_id[i]
+                        if tid is not None:
+                            current_tracked.add(int(tid))
+                            if inside[i]:
+                                current_in_zone.add(int(tid))
+                for tid in current_in_zone - self._prev_in_zone:
+                    det.cross_events.append((tid, "IN"))
+                for tid in self._prev_in_zone - current_in_zone:
+                    if tid in current_tracked:
+                        det.cross_events.append((tid, "OUT"))
+                self._prev_in_zone = current_in_zone
             if self.scenario.counting_type == "fullscreen":
                 # TOÀN MÀN HÌNH: đếm MỌI vật đang trong khung (hiện tại/đỉnh); tổng = tracks.
                 cur = int(len(det))
