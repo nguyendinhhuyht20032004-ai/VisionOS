@@ -15,14 +15,7 @@
 set -e
 
 # --- Kiem tra Redis ---
-if ! command -v redis-cli &>/dev/null; then
-    echo "Redis chua cai. Cai bang: brew install redis && brew services start redis"
-    exit 1
-fi
-if ! redis-cli ping &>/dev/null; then
-    echo "Redis chua chay. Khoi dong: brew services start redis"
-    exit 1
-fi
+# Bỏ qua kiểm tra vì đã dùng start_local_infrastructure.sh
 echo "Redis: OK"
 
 # --- Model weights ---
@@ -73,4 +66,4 @@ echo ""
 mkdir -p data/videos
 
 # --- Chay service ---
-exec python run_service.py --host 0.0.0.0 --port "$CONTROL_API_PORT"
+exec python3 run_service.py --host 0.0.0.0 --port "$CONTROL_API_PORT"

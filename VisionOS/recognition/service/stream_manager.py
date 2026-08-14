@@ -232,16 +232,25 @@ class StreamWorker(threading.Thread):
                 cx, cy = x1 + w / 2, y1 + h / 2
                 now_v = time.time()
                 prev = self._prev_centers.get(str(tid))
+                
                 if prev is not None:
-                    dt = now_v - prev[2]
-                    if dt > 0.01:
-                        box_info["velocity"] = [round((cx - prev[0]) / dt, 1),
-                                                round((cy - prev[1]) / dt, 1)]
+                    # prev = (prev_cx, prev_cy, prev_t, prev_vx, prev_vy)
+                    if cx == prev[0] and cy == prev[1]:
+                        # Box chưa được AI cập nhật (do cơ chế detect_every bỏ qua frame này)
+                        # -> Giữ nguyên vận tốc cũ và KHÔNG cập nhật mốc thời gian (để dt cộng dồn đúng)
+                        box_info["velocity"] = [prev[3], prev[4]]
                     else:
-                        box_info["velocity"] = [0.0, 0.0]
+                        dt = now_v - prev[2]
+                        if dt > 0.01:
+                            vx = round((cx - prev[0]) / dt, 1)
+                            vy = round((cy - prev[1]) / dt, 1)
+                            box_info["velocity"] = [vx, vy]
+                        else:
+                            box_info["velocity"] = [0.0, 0.0]
+                        self._prev_centers[str(tid)] = (cx, cy, now_v, box_info["velocity"][0], box_info["velocity"][1])
                 else:
                     box_info["velocity"] = [0.0, 0.0]
-                self._prev_centers[str(tid)] = (cx, cy, now_v)
+                    self._prev_centers[str(tid)] = (cx, cy, now_v, 0.0, 0.0)
                 boxes.append(box_info)
                 current_tids.add(tid)
                 self._track_last_seen[tid] = time.time()

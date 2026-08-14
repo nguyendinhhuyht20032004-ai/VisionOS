@@ -15,6 +15,7 @@ fi
 echo "🟢 Khởi động Redis ở cổng 6379..."
 # Tắt redis cũ nếu đang chạy
 pkill -f "redis-server" 2>/dev/null || true
+sleep 2 # Đợi quá trình shutdown hoàn tất để giải phóng cổng 6379
 nohup "$REDIS_BIN" > local_bin/redis.log 2>&1 &
 sleep 1
 echo "✅ Redis đã chạy ngầm!"
@@ -28,6 +29,7 @@ fi
 
 echo "🟢 Khởi động MediaMTX ở cổng 8554 (RTSP)..."
 pkill -f "mediamtx" 2>/dev/null || true
+sleep 2 # Đợi quá trình shutdown hoàn tất để giải phóng cổng 8554
 cd local_bin/mediamtx
 # Ghi đè cấu hình để mở port API 9997 và RTSP 8554
 sed -i '' 's/api: no/api: yes/' mediamtx.yml || true
