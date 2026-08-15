@@ -24,6 +24,9 @@ __all__ = ["UltralyticsYoloDetector"]
 class UltralyticsYoloDetector:
     """Detector YOLOv8 (ultralytics) cho đối tượng COCO: người, xe…
 
+    Hỗ trợ format: PyTorch (.pt) hoặc OpenVINO IR (_openvino_model/).
+    OpenVINO nén + tối ưu model để inference nhanh hơn trên CPU Intel.
+
     Cân bằng TỐC ĐỘ + ĐỘ CHÍNH XÁC để chạy realtime trên CPU:
       * **yolov8s** — bản SMALL (44.9% mAP, 11.2M params): bắt tốt xe/người ở
         khoảng cách trung bình, vẫn chạy 15-20 FPS trên CPU. Env ``YOLO_WEIGHTS``
@@ -73,8 +76,12 @@ class UltralyticsYoloDetector:
         self._model = None
         self._names = None
         self._slicer = None
-        self._is_coreml = any(self.weights.endswith(ext)
-                              for ext in (".mlpackage", ".mlmodel"))
+        # OpenVINO model: thư mục *_openvino_model/ hoặc file .xml
+        self._is_openvino = (
+            os.path.isdir(self.weights)
+            and (self.weights.rstrip("/\\").endswith("_openvino_model")
+                 or any(f.endswith(".xml") for f in os.listdir(self.weights)))
+        ) or self.weights.endswith(".xml")
 
     def load(self):
         try:
@@ -102,11 +109,16 @@ class UltralyticsYoloDetector:
                 self._model = YOLO(w)
         else:
             self._model = YOLO(w)             # tự tải weight (kể cả http URL) lần đầu
-        if self.device and not self._is_coreml:
+        if self.device and not self._is_openvino:
             self._model.to(self.device)
         self._names = self._model.names       # dict {id: 'person', ...}
-        fmt = "CoreML" if self._is_coreml else "PyTorch"
-        print(f"✅ YOLOv8 [{fmt}] ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}, "
+        if self._is_openvino:
+            fmt = "OpenVINO"
+        elif self.weights.endswith(".pt"):
+            fmt = "PyTorch"
+        else:
+            fmt = "auto"
+        print(f"YOLOv8 [{fmt}] ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}, "
               f"max_det={self.max_det}) loaded in {time.time() - t0:.1f}s")
         return self
 
@@ -190,18 +202,18 @@ class UltralyticsYoloDetector:
             self.load()
         t0 = time.time()
         want = self._wanted_classes(prompt)
-        if self.tile and not self._is_coreml:
+        if self.tile and not self._is_openvino:
             dets = self._detect_tiled(frame, want)
             mode = "tiled"
         else:
             predict_kw = dict(conf=self.confidence, iou=self.iou,
                               imgsz=self.imgsz, verbose=False)
-            if not self._is_coreml:
+            if not self._is_openvino:
                 predict_kw.update(max_det=self.max_det,
                                   augment=self.augment, half=self.half)
             result = self._model(frame, **predict_kw)[0]
             dets = self._boxes_to_detections(result.boxes, self._names, want)
-            mode = "coreml" if self._is_coreml else "full"
+            mode = "openvino" if self._is_openvino else "full"
         # Gộp box trùng khác lớp (cùng 1 xe 'truck'+'bus') → mỗi vật 1 nhãn.
         if 0.0 < self.dedup_iou < 1.0 and len(dets) > 1:
             dets = self._dedup_cross_class(dets, self.dedup_iou)

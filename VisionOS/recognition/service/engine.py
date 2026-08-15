@@ -224,6 +224,12 @@ class StreamingCounter:
             else:
                 print(f"[AI Service Log] Frame {self._frame_i:04d} | Đang theo dõi (Tracks): {s.get('tracks')} | Đang có trên màn hình: {s.get('in_zone', s.get('in_frame', 0))} | Tốc độ: {s.get('fps')} fps")
 
+        # ---- DEBUG VISUALIZATION ----
+        import os
+        if os.environ.get("DEBUG_SHOW") == "1" and out is not None:
+            cv2.imshow(f"Debug AI Service - {self.scenario.key}", out)
+            cv2.waitKey(1)
+
         return out
 
     # ------------------------------------------------------------------ #

@@ -1,22 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-StreamManager – quản lý luồng RTSP động cho AI Service.
-Mỗi stream được đại diện bởi một Thread (StreamWorker) thực hiện:
-  * Kết nối RTSP (cv2.VideoCapture)
-  * Chạy pipeline YOLO + Supervision (StreamingCounter)
-  * Publish JSON lên Redis Stream (type="frame"/"track_event")
+StreamManager -- quan ly luong RTSP dong cho AI Service.
+Moi stream duoc dai dien boi mot Thread (StreamWorker) thuc hien:
+  * Ket noi RTSP (cv2.VideoCapture)
+  * Chay pipeline YOLO + Supervision (StreamingCounter)
+  * Publish OverlayFrame + DetectionEvent qua gRPC (thay Redis)
+
+Theo AI_SERVICE_CONTRACT.md:
+  * POST /streams/{jobKey} tao moi HOAC cap nhat nong job dang chay
+  * DELETE /streams/{jobKey} dung job, giai phong RTSP
+  * Ket qua day qua grpc_publisher (OverlayPublisher)
 """
 
-import os, json, time, datetime, threading, base64
+import os
+import time
+import datetime
+import threading
+import uuid
 from typing import Dict, Optional
 import warnings
 
-# Tắt các cảnh báo spam từ YOLO / PyTorch như "half is deprecated"
+# Tat cac canh bao spam tu YOLO / PyTorch
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 import cv2
-import redis
 from pydantic import BaseModel, Field
 
 from .engine import StreamingCounter
@@ -24,44 +32,42 @@ from .builder import get_detector, make_scenario
 from .camera import FrameSource
 
 # ---------------------------------------------------------------------------
-# Pydantic models cho Control API
+# Pydantic models cho Control API (theo AI_SERVICE_CONTRACT.md muc 3)
 # ---------------------------------------------------------------------------
 class StreamParams(BaseModel):
-    """Các tham số tùy chọn khi tạo / cập nhật stream."""
-    roi: Optional[list] = None                 # [[x1,y1], [x2,y2]] – không dùng trong demo hiện tại
-    conf: Optional[float] = None               # confidence threshold
-    classes: Optional[list] = None             # ví dụ ["person","car"]
-    detect_every: Optional[int] = Field(3, description="Chạy AI mỗi N frame (tăng để mượt/nhẹ CPU, giảm để chính xác)")
-    track_timeout: Optional[float] = Field(2.0, description="Thời gian (giây) mất dấu trước khi bắn sự kiện end")
-    publish_fps: Optional[float] = Field(12.0, description="Tần số gửi kết quả lên Redis (khung hình / giây)")
+    """Cac tham so tuy chon khi tao / cap nhat stream."""
+    classes: Optional[list] = Field(None, description="Ten lop COCO, >=1 phan tu")
+    conf: Optional[float] = Field(None, description="Confidence threshold 0..1")
+    roi: Optional[list] = Field(None, description="[[x,y],...] phan tram 0..100. 2 diem = vach, >2 = da giac, null = toan khung")
+    publish_fps: Optional[float] = Field(30.0, description="Tran fps day qua gRPC")
+    detect_every: Optional[int] = Field(3, description="Chay detector moi N frame, con lai noi suy")
+    track_timeout: Optional[float] = Field(2.0, description="Giay giu track khi vat bi che khuat")
 
 class StreamControlRequest(BaseModel):
-    camera_id: str = Field(..., description="ID camera (định danh người dùng)")
-    rtsp_url: str = Field(..., description="URL RTSP tới MediaMTX")
+    camera_id: str = Field(..., description="ID camera (so nguyen dang chuoi)")
+    rtsp_url: str = Field(..., description="URL RTSP toi MediaMTX")
     params: Optional[StreamParams] = None
 
 # ---------------------------------------------------------------------------
-# Worker – thực thi một luồng RTSP
+# Worker -- thuc thi mot luong RTSP
 # ---------------------------------------------------------------------------
 class StreamWorker(threading.Thread):
     def __init__(self, stream_id: str, req: StreamControlRequest,
-                 redis_cli: redis.Redis):
+                 grpc_publisher):
         super().__init__(daemon=True)
         self.stream_id = stream_id
         self.camera_id = req.camera_id
         self.rtsp_url = req.rtsp_url
         self.params = req.params or StreamParams()
-        self.redis = redis_cli
+        self.publisher = grpc_publisher
         self.running = True
         self._reported_tracks = set()
-        self._track_last_seen = {}  # dict to store last seen time of each track_id
-        self._prev_centers = {}    # track_id -> (cx, cy, timestamp) for velocity
+        self._track_last_seen = {}
+        self._prev_centers = {}
         self._pending_cross_events = []
 
-        # env vars (đã định nghĩa trong AI_SERVICE_INTEGRATION.md)
+        # env vars
         self.reconnect_interval = float(os.getenv("RTSP_RECONNECT_INTERVAL_SEC", "5"))
-        self.maxlen = int(os.getenv("REDIS_STREAM_MAXLEN", "1000"))
-        self.stream_key = os.getenv("REDIS_STREAM_KEY", "VISIONOS_RESULTS")
 
         self._build_counter()
         self.fs: Optional[FrameSource] = None
@@ -79,7 +85,6 @@ class StreamWorker(threading.Thread):
 
     # -------------------------------------------------------------------
     def _build_counter(self):
-        # Prompt = các class được join bằng ','
         prompt = ",".join(self.params.classes) if self.params.classes else "person"
         conf = self.params.conf or 0.3
 
@@ -91,13 +96,11 @@ class StreamWorker(threading.Thread):
         if self.params.roi:
             if len(self.params.roi) == 2:
                 counting_type = "line"
-                # Flatten [[x1, y1], [x2, y2]] -> [x1, y1, x2, y2]
                 line_pts = [float(c) for pt in self.params.roi for c in pt]
             elif len(self.params.roi) > 2:
                 counting_type = "zone"
                 zone_pts = [[float(c) for c in pt] for pt in self.params.roi]
 
-        # Tạo scenario
         scenario, kind = make_scenario(
             prompt, counting_type, line_pts, zone_pts,
             (960, 540), "IN", "OUT", None, "yolo"
@@ -129,7 +132,7 @@ class StreamWorker(threading.Thread):
         _last_latency = 0.0
 
         while self.running:
-            fps = self.params.publish_fps if self.params.publish_fps is not None else float(os.getenv("OVERLAY_PUBLISH_FPS", "12"))
+            fps = self.params.publish_fps if self.params.publish_fps is not None else float(os.getenv("OVERLAY_PUBLISH_FPS", "30"))
             interval = 1.0 / max(fps, 1e-3)
             if self.fs is None:
                 time.sleep(self.reconnect_interval)
@@ -146,6 +149,9 @@ class StreamWorker(threading.Thread):
                 else:
                     time.sleep(0.1)
                 continue
+
+            # Ghi lai thoi diem DOC DUOC frame (truoc inference) theo Contract
+            captured_at_ms = int(time.time() * 1000)
 
             loop_start = time.time()
             # ----- AI pipeline -----
@@ -169,22 +175,22 @@ class StreamWorker(threading.Thread):
                     if avg_ms > 150:
                         self.counter.detect_every = 1
                         _slow_cpu = True
-                        print(f"[StreamWorker] {self.stream_id} YOLO avg={avg_ms:.0f}ms → detect_every=1 (CPU mode)", flush=True)
+                        print(f"[StreamWorker] {self.stream_id} YOLO avg={avg_ms:.0f}ms -> detect_every=1 (CPU mode)", flush=True)
                     else:
-                        print(f"[StreamWorker] {self.stream_id} YOLO avg={avg_ms:.0f}ms → keeping detect_every={self.counter.detect_every}", flush=True)
+                        print(f"[StreamWorker] {self.stream_id} YOLO avg={avg_ms:.0f}ms -> keeping detect_every={self.counter.detect_every}", flush=True)
                     _tuned = True
 
-            # ----- Publish (giới hạn FPS) -----
+            # ----- Publish qua gRPC (gioi han FPS) -----
             now = time.time()
             if now - last_pub >= interval:
                 t_pub = time.time()
-                self._publish_result(out)
+                self._publish_result(captured_at_ms)
                 pub_ms = (time.time() - t_pub) * 1000
                 last_pub = now
             else:
                 pub_ms = 0.0
 
-            # ----- Benchmark log (mỗi 30 frame) -----
+            # ----- Benchmark log (moi 30 frame) -----
             total_ms = (time.time() - loop_start) * 1000
             if not hasattr(self, '_bench_count'):
                 self._bench_count = 0
@@ -205,8 +211,12 @@ class StreamWorker(threading.Thread):
             self.fs.stop()
 
     # -------------------------------------------------------------------
-    def _publish_result(self, annotated_bgr):
-        # 1. Frame result
+    def _publish_result(self, captured_at_ms: int):
+        """Publish OverlayFrame + DetectionEvent qua gRPC."""
+        if not self.publisher:
+            return
+
+        # 1. Build boxes list
         boxes = []
         det = self.counter.last_det
         current_tids = set()
@@ -216,62 +226,86 @@ class StreamWorker(threading.Thread):
             for i, tid in enumerate(det.tracker_id):
                 if tid is None:
                     continue
-                # Convert (x1, y1, x2, y2) → (x, y, w, h)
+                # Toa do pixel: (x, y, w, h) goc tren-trai (theo Contract)
                 x1 = float(det.xyxy[i][0])
                 y1 = float(det.xyxy[i][1])
                 x2 = float(det.xyxy[i][2])
                 y2 = float(det.xyxy[i][3])
                 w = x2 - x1
                 h = y2 - y1
+                cx = x1 + w / 2.0
+                cy = y1 + h / 2.0
+                str_tid = str(tid)
+
+                vx = 0.0
+                vy = 0.0
+                now_t = time.time()
+
+                if not hasattr(self, "_prev_centers"):
+                    self._prev_centers = {}
+
+                if str_tid in self._prev_centers:
+                    prev_cx, prev_cy, prev_t = self._prev_centers[str_tid]
+                    dt = now_t - prev_t
+                    if dt > 0.01:
+                        vx = (cx - prev_cx) / dt
+                        vy = (cy - prev_cy) / dt
+
+                self._prev_centers[str_tid] = (cx, cy, now_t)
+
                 box_info = {
-                    "track_id": str(tid),
-                    "class": str(det.data.get("class_name")[i]) if "class_name" in det.data and len(det.data["class_name"]) > i else "",
+                    "track_id": str_tid,
+                    "class_name": str(det.data.get("class_name")[i]) if "class_name" in det.data and len(det.data["class_name"]) > i else "",
                     "confidence": float(det.confidence[i]) if hasattr(det, "confidence") and det.confidence is not None else 0.0,
-                    "bbox": [x1, y1, w, h],
+                    "x": x1,
+                    "y": y1,
+                    "w": w,
+                    "h": h,
+                    "velocity_x": vx,
+                    "velocity_y": vy,
                 }
-                cx, cy = x1 + w / 2, y1 + h / 2
-                now_v = time.time()
-                prev = self._prev_centers.get(str(tid))
-                
-                if prev is not None:
-                    # prev = (prev_cx, prev_cy, prev_t, prev_vx, prev_vy)
-                    if cx == prev[0] and cy == prev[1]:
-                        # Box chưa được AI cập nhật (do cơ chế detect_every bỏ qua frame này)
-                        # -> Giữ nguyên vận tốc cũ và KHÔNG cập nhật mốc thời gian (để dt cộng dồn đúng)
-                        box_info["velocity"] = [prev[3], prev[4]]
-                    else:
-                        dt = now_v - prev[2]
-                        if dt > 0.01:
-                            vx = round((cx - prev[0]) / dt, 1)
-                            vy = round((cy - prev[1]) / dt, 1)
-                            box_info["velocity"] = [vx, vy]
-                        else:
-                            box_info["velocity"] = [0.0, 0.0]
-                        self._prev_centers[str(tid)] = (cx, cy, now_v, box_info["velocity"][0], box_info["velocity"][1])
-                else:
-                    box_info["velocity"] = [0.0, 0.0]
-                    self._prev_centers[str(tid)] = (cx, cy, now_v, 0.0, 0.0)
                 boxes.append(box_info)
                 current_tids.add(tid)
                 self._track_last_seen[tid] = time.time()
-                self._track_classes[tid] = box_info["class"]
+                self._track_classes[tid] = box_info["class_name"]
 
-                # Emit start event when a new track appears
+                # Emit START event when a new track appears
                 if tid not in self._reported_tracks:
                     self._reported_tracks.add(tid)
-                    self._publish_track_event(str(tid), boxes[-1]["class"], "start")
-            
-        # Emit end events for tracks not seen for 2 seconds
+                    self.publisher.publish_event(
+                        camera_id=self.camera_id,
+                        job_key=self.stream_id,
+                        track_id=str(tid),
+                        class_name=box_info["class_name"],
+                        kind="START",
+                        occurred_at_ms=captured_at_ms,
+                    )
+
+        # 2. Publish frame qua gRPC (ke ca khi boxes rong, de client xoa box cu)
+        self.publisher.publish_frame(
+            camera_id=self.camera_id,
+            job_key=self.stream_id,
+            captured_at_ms=captured_at_ms,
+            width=self.counter.w,
+            height=self.counter.h,
+            boxes=boxes,
+        )
+
+        if len(boxes) > 0 and self._bench_count and self._bench_count % 30 == 0:
+            sample = boxes[0]
+            print(f"[StreamWorker] {self.stream_id} published {len(boxes)} boxes via gRPC", flush=True)
+
+        # 3. Emit end events for tracks not seen for track_timeout seconds
         now_ts = time.time()
         ended_tids = []
         for tid, last_seen in list(self._track_last_seen.items()):
             timeout = self.params.track_timeout if self.params.track_timeout is not None else 2.0
             if now_ts - last_seen > timeout:
                 ended_tids.append(tid)
-        
+
         for tid in ended_tids:
-            cls_name = self._track_classes.get(tid, "unknown")
-            self._publish_track_event(str(tid), cls_name, "end")
+            # Note: Contract khong co event "end", chi co START/IN/OUT
+            # Nhung van clean up internal state
             del self._track_last_seen[tid]
             if tid in self._track_classes:
                 del self._track_classes[tid]
@@ -279,55 +313,19 @@ class StreamWorker(threading.Thread):
                 self._reported_tracks.remove(tid)
             self._prev_centers.pop(str(tid), None)
 
-        # Publish IN/OUT crossing events to Redis
+        # 4. Publish IN/OUT crossing events qua gRPC
         if self._pending_cross_events:
             for tid, direction in self._pending_cross_events:
                 cls_name = self._track_classes.get(tid, "unknown") if hasattr(self, '_track_classes') else "unknown"
-                self._publish_track_event(str(tid), cls_name, direction)
+                self.publisher.publish_event(
+                    camera_id=self.camera_id,
+                    job_key=self.stream_id,
+                    track_id=str(tid),
+                    class_name=cls_name,
+                    kind=direction,  # "IN" or "OUT"
+                    occurred_at_ms=captured_at_ms,
+                )
             self._pending_cross_events = []
-
-        frame_msg = {
-            "type": "frame",
-            "camera_id": self.camera_id,
-            "stream_id": self.stream_id,
-            "frame_timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-            "resolution": {"width": self.counter.w, "height": self.counter.h},
-            "boxes": boxes,
-        }
-        
-        try:
-            self.redis.xadd(
-                self.stream_key,
-                {"data": json.dumps(frame_msg)},
-                maxlen=self.maxlen,
-                approximate=True,
-            )
-            if len(boxes) > 0:
-                sample = boxes[0]
-                bbox = sample['bbox']
-                print(f"[StreamWorker] {self.stream_id} published {len(boxes)} boxes. Sample Box ID {sample['track_id']}: x={bbox[0]:.1f}, y={bbox[1]:.1f}, v={sample['velocity']}", flush=True)
-            else:
-                print(f"[StreamWorker] {self.stream_id} published frame with 0 boxes", flush=True)
-        except Exception as e:
-            print(f"[StreamWorker] {self.stream_id} failed to publish to Redis: {e}", flush=True)
-
-    # -------------------------------------------------------------------
-    def _publish_track_event(self, track_id: str, class_name: str, event: str):
-        ev = {
-            "type": "track_event",
-            "camera_id": self.camera_id,
-            "stream_id": self.stream_id,
-            "track_id": track_id,
-            "class": class_name,
-            "event": event,
-            "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-        }
-        self.redis.xadd(
-            self.stream_key,
-            {"data": json.dumps(ev)},
-            maxlen=self.maxlen,
-            approximate=True,
-        )
 
     # -------------------------------------------------------------------
     def stop(self):
@@ -341,11 +339,11 @@ class StreamWorker(threading.Thread):
         self._build_counter()
 
 # ---------------------------------------------------------------------------
-# StreamManager – singleton quản lý các StreamWorker
+# StreamManager -- singleton quan ly cac StreamWorker
 # ---------------------------------------------------------------------------
 class StreamManager:
-    def __init__(self, redis_cli: redis.Redis):
-        self.redis = redis_cli
+    def __init__(self, grpc_publisher):
+        self.publisher = grpc_publisher
         self.workers: Dict[str, StreamWorker] = {}
         self.lock = threading.Lock()
 
@@ -353,17 +351,17 @@ class StreamManager:
         with self.lock:
             if stream_id in self.workers:
                 worker = self.workers[stream_id]
-                # Nếu URL không đổi, cập nhật động thông số mà không cần khởi động lại
+                # Neu URL khong doi, cap nhat dong thong so ma khong can khoi dong lai
                 if worker.rtsp_url == req.rtsp_url:
                     print(f"[StreamManager] Stream {stream_id} exists with same URL. Updating params dynamically...", flush=True)
                     worker.update_params(req.params or StreamParams())
                     return {"status": "updated", "stream_id": stream_id}
                 else:
-                    # Nếu URL thay đổi, bắt buộc phải tắt đi bật lại
+                    # Neu URL thay doi, bat buoc phai tat di bat lai
                     print(f"[StreamManager] Stream {stream_id} URL changed. Stopping old stream to restart...", flush=True)
                     worker.stop()
-            
-            worker = StreamWorker(stream_id, req, self.redis)
+
+            worker = StreamWorker(stream_id, req, self.publisher)
             self.workers[stream_id] = worker
             worker.start()
             return {"status": "started", "stream_id": stream_id}
@@ -387,3 +385,10 @@ class StreamManager:
                 raise KeyError(f"Stream {stream_id} not found")
             worker.stop()
             return {"status": "stopped", "stream_id": stream_id}
+
+    def stop_all(self):
+        """Dung tat ca worker (dung khi shutdown)."""
+        with self.lock:
+            for worker in self.workers.values():
+                worker.stop()
+            self.workers.clear()

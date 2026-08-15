@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package overlay;
+
+option java_multiple_files = true;
+option java_package = "com.visionos.overlay";
+
+// ---------------------------------------------------------------------------
+// OverlayIngest — Backend implement, AI Service gọi
+// ---------------------------------------------------------------------------
+service OverlayIngest {
+  // Health check — AI Service chờ Backend sẵn sàng
+  rpc Health(HealthRequest) returns (HealthResponse);
+
+  // Bbox stream — 1 stream duy nhất cho toàn tiến trình, cho phép mất
+  rpc PublishFrames(stream OverlayFrame) returns (PublishSummary);
+
+  // Sự kiện đếm — unary, không được mất, có ack
+  rpc PublishEvent(DetectionEvent) returns (EventAck);
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+}
+
+message OverlayFrame {
+  string camera_id = 1;
+  string job_key = 2;
+  int64 captured_at_ms = 3;       // epoch millis UTC, mốc ĐỌC ĐƯỢC frame
+  Resolution resolution = 4;
+  repeated BoundingBox boxes = 5;
+}
+
+message Resolution {
+  int32 width = 1;
+  int32 height = 2;
+}
+
+message BoundingBox {
+  string track_id = 1;
+  string class_name = 2;
+  double confidence = 3;
+  double x = 4;                   // pixel, góc trên-trái
+  double y = 5;
+  double w = 6;
+  double h = 7;
+  double velocity_x = 8;          // pixel/giay
+  double velocity_y = 9;          // pixel/giay
+}
+
+message PublishSummary {
+  int64 received = 1;
+  int64 dropped = 2;
+}
+
+message DetectionEvent {
+  string event_id = 1;            // UUID do AI Service sinh, Backend dedup theo field này
+  string camera_id = 2;
+  string job_key = 3;
+  string track_id = 4;
+  string class_name = 5;
+  Kind kind = 6;
+  int64 occurred_at_ms = 7;
+
+  enum Kind {
+    START = 0;                    // track mới xuất hiện trong khung
+    IN = 1;                       // cắt qua vạch / vào vùng
+    OUT = 2;                      // cắt ngược / rời vùng
+  }
+}
+
+message EventAck {
+  bool accepted = 1;
+}
