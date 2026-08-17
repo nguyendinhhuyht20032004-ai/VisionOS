@@ -147,7 +147,7 @@ def main() -> int:
     # URL mac dinh la data/videos/people-walking.mp4. Ta se thu doi sang cai khac (neu co)
     # Vi test cuc bo, cu dung lai chinh url do hoac 1 url ao de xem log he thong co ngat luong cu di bat lai khong.
     print(f"\n[8] Cap nhat luong '{args.job_key}': Thay doi URL stream (De test chuc nang Restart luong)...")
-    body["rtsp_url"] = "data\\videos\\people-walking.mp4?dummy=1" # Them dummy de gia lap URL moi
+    body["rtsp_url"] = "data/videos/people-walking.mp4?dummy=1" # Them dummy de gia lap URL moi
     r = requests.post(f"{base}/streams/{args.job_key}", json=body, timeout=10)
     print(f"    Status: {r.status_code}")
     print(f"    Response: {json.dumps(r.json(), indent=2)}")
