@@ -6,6 +6,14 @@ import requests
 import redis
 import json
 
+# Lấy đường dẫn FFmpeg Native
+try:
+    import imageio_ffmpeg
+    FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+except ImportError:
+    print("Vui lòng cài đặt: pip3 install imageio-ffmpeg")
+    exit(1)
+
 # 1. Download sample video if not exists
 os.makedirs("data", exist_ok=True)
 video_path = "data/people-walking.mp4"
@@ -15,24 +23,19 @@ if not os.path.exists(video_path):
     urllib.request.urlretrieve(video_url, video_path)
     print("Downloaded.")
 
-# 1.5 Copy video to container
-print("Copying video to API container...")
-subprocess.run(["docker", "cp", "data/people-walking.mp4", "visionos-api-1:/data/people-walking.mp4"])
-
-# 2. Push video to MediaMTX via RTSP using ffmpeg
-print("Starting FFmpeg to stream to MediaMTX...")
+# 2. Push video to MediaMTX via RTSP using Native FFmpeg
+print("Starting FFmpeg NATIVE to stream to MediaMTX...")
 ffmpeg_proc = subprocess.Popen([
-    "docker", "exec", "visionos-api-1", "bash", "-c",
-    "ffmpeg -re -stream_loop -1 -i /data/people-walking.mp4 -c copy -f rtsp rtsp://mediamtx:8554/test-people"
-])
+    FFMPEG_BIN, "-re", "-stream_loop", "-1", "-i", video_path, "-c", "copy", "-f", "rtsp", "rtsp://localhost:8554/test-people"
+], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(3) # Wait for stream to be ready
 
-# 3. Call API to start tracking
-print("Calling API to start AI tracking...")
-url = "http://localhost:8000/streams/stream-people"
+# 3. Call API to start tracking (NATIVE API chạy port 8001)
+print("Calling Native API (8001) to start AI tracking...")
+url = "http://localhost:8001/streams/stream-people"
 payload = {
     "camera_id": "cam-people",
-    "rtsp_url": "rtsp://mediamtx:8554/test-people",
+    "rtsp_url": "rtsp://localhost:8554/test-people",
     "params": {
         "conf": 0.3,
         "classes": ["person"],
@@ -87,8 +90,9 @@ except Exception as e:
 
 # Clean up
 print("\nStopping stream in API...")
-requests.delete("http://localhost:8000/streams/stream-people")
+try:
+    requests.delete("http://localhost:8001/streams/stream-people")
+except:
+    pass
 ffmpeg_proc.kill()
-subprocess.run(["docker", "exec", "visionos-api-1", "pkill", "-f", "people-walking"], capture_output=True)
 print("Done.")
-

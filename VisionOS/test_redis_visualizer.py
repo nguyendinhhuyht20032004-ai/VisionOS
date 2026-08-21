@@ -66,6 +66,8 @@ print("Đang phát Video RTSP Live và Nội suy Toạ độ từ Redis... (Bấ
 last_time = time.time()
 frame_count = 0
 fps_display = 0
+unique_trackers = set()
+current_count = 0
 
 while True:
     ret, frame = cap.read()
@@ -93,7 +95,8 @@ while True:
     scale_x = frame_w / 960.0
     scale_y = frame_h / 540.0
 
-    xyxy = []
+    xyxy_smooth = []
+    xyxy_raw = []
     confidence = []
     tracker_id = []
 
@@ -101,35 +104,55 @@ while True:
         x, y, w, h = box['bbox']
         vx, vy = box.get('velocity', [0.0, 0.0])
         
-        # NỘI SUY: Vị trí mới = Vị trí cũ + Vận tốc * Thời gian trôi qua
+        # Toạ độ gốc chưa nội suy (để vẽ Trace chính xác)
+        rx1, ry1 = x * scale_x, y * scale_y
+        rx2, ry2 = (x + w) * scale_x, (y + h) * scale_y
+        xyxy_raw.append([rx1, ry1, rx2, ry2])
+        
+        # Toạ độ nội suy vận tốc (để vẽ Box mượt mà, bám dính lấy người)
         pred_x = x + (vx * delta_time)
         pred_y = y + (vy * delta_time)
-
         x1 = pred_x * scale_x
         y1 = pred_y * scale_y
         x2 = (pred_x + w) * scale_x
         y2 = (pred_y + h) * scale_y
+        xyxy_smooth.append([x1, y1, x2, y2])
         
-        xyxy.append([x1, y1, x2, y2])
         confidence.append(box['confidence'])
         tracker_id.append(int(box['track_id']))
 
-    if len(xyxy) > 0:
-        detections = sv.Detections(
-            xyxy=np.array(xyxy),
+    if len(xyxy_smooth) > 0:
+        # Detections mượt (Nội suy) dành cho Box và Label
+        detections_smooth = sv.Detections(
+            xyxy=np.array(xyxy_smooth),
             confidence=np.array(confidence),
-            class_id=np.zeros(len(xyxy), dtype=int),
+            class_id=np.zeros(len(xyxy_smooth), dtype=int),
             tracker_id=np.array(tracker_id)
         )
-        labels = [f"#{t_id} {conf:.2f}" for t_id, conf in zip(detections.tracker_id, detections.confidence)]
-        frame = box_annotator.annotate(scene=frame, detections=detections)
-        frame = label_annotator.annotate(scene=frame, detections=detections, labels=labels)
-        frame = trace_annotator.annotate(scene=frame, detections=detections)
+        # Detections thật (Raw) dành cho Trace quỹ đạo (không bị zigzag)
+        detections_raw = sv.Detections(
+            xyxy=np.array(xyxy_raw),
+            confidence=np.array(confidence),
+            class_id=np.zeros(len(xyxy_raw), dtype=int),
+            tracker_id=np.array(tracker_id)
+        )
+        
+        labels = [f"#{t_id} {conf:.2f}" for t_id, conf in zip(detections_smooth.tracker_id, detections_smooth.confidence)]
+        frame = box_annotator.annotate(scene=frame, detections=detections_smooth)
+        frame = label_annotator.annotate(scene=frame, detections=detections_smooth, labels=labels)
+        frame = trace_annotator.annotate(scene=frame, detections=detections_raw)
+        
+        for t_id in tracker_id:
+            unique_trackers.add(t_id)
+        current_count = len(xyxy_smooth)
+    else:
+        current_count = 0
 
-    # Hiển thị FPS
+    # Hiển thị FPS và Đếm
     cv2.putText(frame, f"Frontend Render: {fps_display:.1f} FPS", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-    if delta_time > 0:
-        cv2.putText(frame, f"Interpolation: +{delta_time*1000:.0f}ms", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 165, 0), 2)
+        
+    cv2.putText(frame, f"Current Count: {current_count}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 0, 255), 3)
+    cv2.putText(frame, f"Total Unique People: {len(unique_trackers)}", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 3)
 
     frame_resized = cv2.resize(frame, (960, 540))
     cv2.imshow("Supervision + Velocity Interpolation", frame_resized)

@@ -73,6 +73,8 @@ class UltralyticsYoloDetector:
         self._model = None
         self._names = None
         self._slicer = None
+        self._is_coreml = any(self.weights.endswith(ext)
+                              for ext in (".mlpackage", ".mlmodel"))
 
     def load(self):
         try:
@@ -100,11 +102,12 @@ class UltralyticsYoloDetector:
                 self._model = YOLO(w)
         else:
             self._model = YOLO(w)             # tự tải weight (kể cả http URL) lần đầu
-        if self.device:
+        if self.device and not self._is_coreml:
             self._model.to(self.device)
         self._names = self._model.names       # dict {id: 'person', ...}
-        print(f"✅ YOLOv8 ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}, "
-              f"max_det={self.max_det}, TTA={self.augment}, half={self.half}) loaded in {time.time() - t0:.1f}s")
+        fmt = "CoreML" if self._is_coreml else "PyTorch"
+        print(f"✅ YOLOv8 [{fmt}] ({self.weights}, imgsz={self.imgsz}, conf={self.confidence}, "
+              f"max_det={self.max_det}) loaded in {time.time() - t0:.1f}s")
         return self
 
     @staticmethod
@@ -187,15 +190,18 @@ class UltralyticsYoloDetector:
             self.load()
         t0 = time.time()
         want = self._wanted_classes(prompt)
-        if self.tile:
+        if self.tile and not self._is_coreml:
             dets = self._detect_tiled(frame, want)
             mode = "tiled"
         else:
-            result = self._model(frame, conf=self.confidence, iou=self.iou,
-                                 imgsz=self.imgsz, max_det=self.max_det,
-                                 augment=self.augment, half=self.half, verbose=False)[0]
+            predict_kw = dict(conf=self.confidence, iou=self.iou,
+                              imgsz=self.imgsz, verbose=False)
+            if not self._is_coreml:
+                predict_kw.update(max_det=self.max_det,
+                                  augment=self.augment, half=self.half)
+            result = self._model(frame, **predict_kw)[0]
             dets = self._boxes_to_detections(result.boxes, self._names, want)
-            mode = "full"
+            mode = "coreml" if self._is_coreml else "full"
         # Gộp box trùng khác lớp (cùng 1 xe 'truck'+'bus') → mỗi vật 1 nhãn.
         if 0.0 < self.dedup_iou < 1.0 and len(dets) > 1:
             dets = self._dedup_cross_class(dets, self.dedup_iou)

@@ -45,8 +45,8 @@ from .vectordb import VectorStore, embed_crop, make_event_payload
 
 app = FastAPI(title="VisionOS · AI Counting Service")
 
-os.makedirs("/data/videos", exist_ok=True)
-app.mount("/api/videos", StaticFiles(directory="/data/videos"), name="videos")
+os.makedirs("data/videos", exist_ok=True)
+app.mount("/api/videos", StaticFiles(directory="data/videos"), name="videos")
 
 # ---------------------------------------------------------------------------
 # Redis & Stream Manager Init

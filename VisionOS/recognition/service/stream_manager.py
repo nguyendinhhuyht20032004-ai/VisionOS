@@ -56,6 +56,7 @@ class StreamWorker(threading.Thread):
         self._reported_tracks = set()
         self._track_last_seen = {}  # dict to store last seen time of each track_id
         self._prev_centers = {}    # track_id -> (cx, cy, timestamp) for velocity
+        self._pending_cross_events = []
 
         # env vars (đã định nghĩa trong AI_SERVICE_INTEGRATION.md)
         self.reconnect_interval = float(os.getenv("RTSP_RECONNECT_INTERVAL_SEC", "5"))
@@ -80,7 +81,7 @@ class StreamWorker(threading.Thread):
     def _build_counter(self):
         # Prompt = các class được join bằng ','
         prompt = ",".join(self.params.classes) if self.params.classes else "person"
-        conf = self.params.conf or 0.35
+        conf = self.params.conf or 0.3
 
         # Determine counting type from ROI
         counting_type = "fullscreen"
@@ -151,6 +152,12 @@ class StreamWorker(threading.Thread):
             t_ai = time.time()
             out = self.counter.process(frame)
             ai_ms = (time.time() - t_ai) * 1000
+
+            # Collect cross events (IN/OUT) before next detection overwrites them
+            det_ev = self.counter.last_det
+            if det_ev and hasattr(det_ev, "cross_events") and det_ev.cross_events:
+                self._pending_cross_events.extend(det_ev.cross_events)
+                det_ev.cross_events = []
 
             # ----- Auto-tune detect_every from actual YOLO speed -----
             cur_latency = self.counter._last_latency_ms
@@ -225,16 +232,25 @@ class StreamWorker(threading.Thread):
                 cx, cy = x1 + w / 2, y1 + h / 2
                 now_v = time.time()
                 prev = self._prev_centers.get(str(tid))
+                
                 if prev is not None:
-                    dt = now_v - prev[2]
-                    if dt > 0.01:
-                        box_info["velocity"] = [round((cx - prev[0]) / dt, 1),
-                                                round((cy - prev[1]) / dt, 1)]
+                    # prev = (prev_cx, prev_cy, prev_t, prev_vx, prev_vy)
+                    if cx == prev[0] and cy == prev[1]:
+                        # Box chưa được AI cập nhật (do cơ chế detect_every bỏ qua frame này)
+                        # -> Giữ nguyên vận tốc cũ và KHÔNG cập nhật mốc thời gian (để dt cộng dồn đúng)
+                        box_info["velocity"] = [prev[3], prev[4]]
                     else:
-                        box_info["velocity"] = [0.0, 0.0]
+                        dt = now_v - prev[2]
+                        if dt > 0.01:
+                            vx = round((cx - prev[0]) / dt, 1)
+                            vy = round((cy - prev[1]) / dt, 1)
+                            box_info["velocity"] = [vx, vy]
+                        else:
+                            box_info["velocity"] = [0.0, 0.0]
+                        self._prev_centers[str(tid)] = (cx, cy, now_v, box_info["velocity"][0], box_info["velocity"][1])
                 else:
                     box_info["velocity"] = [0.0, 0.0]
-                self._prev_centers[str(tid)] = (cx, cy, now_v)
+                    self._prev_centers[str(tid)] = (cx, cy, now_v, 0.0, 0.0)
                 boxes.append(box_info)
                 current_tids.add(tid)
                 self._track_last_seen[tid] = time.time()
@@ -263,9 +279,12 @@ class StreamWorker(threading.Thread):
                 self._reported_tracks.remove(tid)
             self._prev_centers.pop(str(tid), None)
 
-        # Clear line crossing events — IN/OUT không nằm trong enum start|end của spec
-        if det and hasattr(det, "cross_events"):
-            det.cross_events = []
+        # Publish IN/OUT crossing events to Redis
+        if self._pending_cross_events:
+            for tid, direction in self._pending_cross_events:
+                cls_name = self._track_classes.get(tid, "unknown") if hasattr(self, '_track_classes') else "unknown"
+                self._publish_track_event(str(tid), cls_name, direction)
+            self._pending_cross_events = []
 
         frame_msg = {
             "type": "frame",
